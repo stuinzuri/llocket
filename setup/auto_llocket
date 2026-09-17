@@ -1,0 +1,1 @@
+/Users/YOUR_USERNAME/llocket/nas	-fstype=nfs,vers=3,resvport,rw	YOUR_NAS_HOST:YOUR_NAS_EXPORT

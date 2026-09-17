@@ -1,0 +1,13 @@
+Run this from a Terminal window opened WITHIN the service account's own
+desktop session (fast-user-switch or Screen Sharing into that account on
+the host) -- NOT over SSH. SSH doesn't carry the GUI context macOS needs
+to show the permission prompt.
+
+It should trigger a system dialog asking to allow access to files on a
+network volume. Click Allow.
+
+python3 -c "import os; print(os.listdir('/Users/YOUR_USERNAME/llocket/nas/queue/running'))"
+
+If it prints an empty list ([]) with no error, it worked -- the permission
+was granted. If it still raises PermissionError, the dialog either didn't
+appear or wasn't answered yet; try running it again.

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.llocket.worker</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/python3</string>
+		<string>-u</string>
+		<string>/Users/YOUR_USERNAME/llocket/worker.py</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>/Users/YOUR_USERNAME/llocket</string>
+	<key>StandardOutPath</key>
+	<string>/Users/YOUR_USERNAME/llocket/worker.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/YOUR_USERNAME/llocket/worker.log</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+</dict>
+</plist>

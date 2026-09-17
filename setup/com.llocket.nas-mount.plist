@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.llocket.nas-mount</string>
+	<key>UserName</key>
+	<string>YOUR_USERNAME</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/YOUR_USERNAME/llocket/setup/mount_llocket_nas.sh</string>
+		<string>YOUR_NAS_HOST</string>
+		<string>YOUR_NAS_EXPORT</string>
+		<string>/Users/YOUR_USERNAME/llocket/nas</string>
+	</array>
+	<key>StandardOutPath</key>
+	<string>/Users/YOUR_USERNAME/llocket/nas-mount.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/YOUR_USERNAME/llocket/nas-mount.log</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<false/>
+</dict>
+</plist>
