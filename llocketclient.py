@@ -19,6 +19,7 @@ CLI:
     python3 llocketclient.py [--api URL] status <job_id>
     python3 llocketclient.py [--api URL] wait <job_id>
     python3 llocketclient.py [--api URL] cancel <job_id>
+    python3 llocketclient.py [--api URL] purge <job_id>
 $LLOCKET_API sets the default API URL.
 """
 
@@ -87,6 +88,13 @@ class Llocket:
     def cancel(self, job_id: str) -> dict:
         return self._request("DELETE", f"/jobs/{job_id}")
 
+    def purge(self, job_id: str) -> dict:
+        """Drop a finished job's content on the server (prompt, output,
+        thinking), keeping its metadata. Call once the result is safely
+        stored client-side. 409 while it's unfinished or still needed by a
+        pending dependent."""
+        return self._request("POST", f"/jobs/{job_id}/purge")
+
     def wait(self, job_id: str, poll: float = 15.0, timeout: Optional[float] = None,
              on_poll: Optional[Callable[[dict], None]] = None) -> dict:
         """Poll until the job is done or failed; returns the final job dict.
@@ -125,7 +133,7 @@ def main(argv=None) -> int:
     s = sub.add_parser("list")
     s.add_argument("--project")
     s.add_argument("--status", choices=["queued", "running", "done", "failed"])
-    for name in ("status", "wait", "cancel"):
+    for name in ("status", "wait", "cancel", "purge"):
         sub.add_parser(name).add_argument("job_id")
     args = ap.parse_args(argv)
     q = Llocket(args.api)
@@ -139,6 +147,8 @@ def main(argv=None) -> int:
             print(_summary(q.wait(args.job_id, on_poll=lambda j: print(_summary(j), file=sys.stderr))))
         elif args.cmd == "cancel":
             print(q.cancel(args.job_id))
+        elif args.cmd == "purge":
+            print(q.purge(args.job_id))
     except LlocketError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

@@ -153,7 +153,10 @@ def resolve_dependencies(job: dict, messages: list) -> list:
         state, path = job_state(d)
         if state != "done":
             raise RuntimeError(f"dependency {d} is {state or 'missing'} at claim time")
-        outputs[d] = read_json(path, "output.json").get("content", "")
+        out = read_json(path, "output.json")
+        if out.get("content_purged"):
+            raise RuntimeError(f"dependency {d}'s output was purged before this job ran")
+        outputs[d] = out.get("content", "")
     job["resolved_dependencies"] = {d: len(v) for d, v in outputs.items()}
     return substitute_outputs(messages, outputs)
 

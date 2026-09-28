@@ -11,6 +11,10 @@ through the filesystem, exactly like everything else in this design.
     GET    /jobs/{id}   status + result (searches all four state dirs)
     GET    /jobs         list jobs, optional ?project=&status= filters
     DELETE /jobs/{id}   cancel -- only possible while still queued
+    POST   /jobs/{id}/purge  drop a finished job's content (prompt, output,
+                        thinking), keeping its metadata -- for clients that
+                        have safely stored the result and want nothing
+                        sensitive left in the queue
 
 Run under the account that owns the queue and Ollama instance:
     python3 -m uvicorn api:app --host 0.0.0.0 --port 8000
@@ -25,8 +29,8 @@ from typing import List, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from lib import (OLLAMA_HOST, QUEUE_ROOT, STATES, atomic_write_json, ensure_queue_dirs, job_state, now_iso,
-                 placeholders_in, read_json)
+from lib import (OLLAMA_HOST, QUEUE_ROOT, STATES, atomic_write_json, dependents_pending, ensure_queue_dirs,
+                 job_state, now_iso, placeholders_in, purge_content, read_json)
 
 DEFAULT_MODEL = "orcarouter/Qwen3.8-27B-Uncensored:q8_0"
 
@@ -177,3 +181,17 @@ def cancel_job(job_id: str):
         # check above and this rename -- too late to cancel now.
         raise HTTPException(status_code=409, detail="job was claimed by the worker before it could be cancelled")
     return {"id": job_id, "status": "failed", "error": "cancelled"}
+
+
+@app.post("/jobs/{job_id}/purge")
+def purge_job(job_id: str):
+    state, path = find_job_dir(job_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if state not in ("done", "failed"):
+        raise HTTPException(status_code=409, detail=f"job is {state}; only finished jobs can be purged")
+    pending = dependents_pending(job_id)
+    if pending:
+        raise HTTPException(status_code=409, detail=f"still needed by pending job(s): {', '.join(pending)}")
+    job = purge_content(path)
+    return {"id": job_id, "status": state, "content_purged_at": job["content_purged_at"]}

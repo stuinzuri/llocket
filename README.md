@@ -109,6 +109,19 @@ disconnect: the chain runs to completion server-side.
 `wait()` tolerates transient network errors; the job never depends on
 the client staying connected.
 
+## Purging content
+
+`POST /jobs/{id}/purge` (client: `purge()`) empties a finished job's
+content -- the prompt messages in `input.json`, the output text and
+thinking in `output.json` -- and stamps `content_purged_at` in
+`job.json`; status, timings and token counts stay. Meant for clients to
+call as soon as they've safely stored a result, so sensitive text sits
+in the queue only while a job is in flight. Refused (409) while the job
+is queued/running or while a pending job still depends on its output. A
+dependent that runs after its dependency was purged fails with a clear
+error. Files are replaced, not securely wiped; storage snapshots (e.g.
+on a NAS) may retain earlier versions.
+
 ## Retention
 
 Finished jobs are transient: the worker removes `done/` and `failed/`

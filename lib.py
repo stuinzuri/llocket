@@ -185,3 +185,48 @@ def prune_finished(retention_days: float = RETENTION_DAYS, now: float = None) ->
                 shutil.rmtree(path, ignore_errors=True)
                 removed.append(job_id)
     return removed
+
+
+def dependents_pending(job_id: str) -> list:
+    """Queued/running jobs that depend on job_id (and so still need its output)."""
+    pending = []
+    for state in ("queued", "running"):
+        root = os.path.join(QUEUE_ROOT, state)
+        if not os.path.isdir(root):
+            continue
+        for other in os.listdir(root):
+            try:
+                deps = read_json(os.path.join(root, other), "job.json").get("depends_on") or []
+            except (OSError, ValueError):
+                continue
+            if job_id in deps:
+                pending.append(other)
+    return sorted(pending)
+
+
+def purge_content(job_dir: str) -> dict:
+    """Drop a finished job's content -- prompt messages, output text,
+    thinking -- keeping its metadata (job.json, stats). Files are replaced
+    via write-then-rename, so the old content's blocks are freed, not
+    overwritten (no secure wipe; NAS snapshots, if enabled, may keep them)."""
+    input_path = os.path.join(job_dir, "input.json")
+    if os.path.isfile(input_path):
+        doc = read_json(job_dir, "input.json")
+        doc["messages"] = []
+        doc["content_purged"] = True
+        atomic_write_json(job_dir, "input.json", doc)
+    output_path = os.path.join(job_dir, "output.json")
+    if os.path.isfile(output_path):
+        doc = read_json(job_dir, "output.json")
+        doc["content"] = ""
+        doc["thinking"] = None
+        doc["content_purged"] = True
+        atomic_write_json(job_dir, "output.json", doc)
+    for extra in ("response.raw.jsonl",):
+        path = os.path.join(job_dir, extra)
+        if os.path.isfile(path):
+            os.remove(path)
+    job = read_json(job_dir, "job.json")
+    job["content_purged_at"] = now_iso()
+    atomic_write_json(job_dir, "job.json", job)
+    return job

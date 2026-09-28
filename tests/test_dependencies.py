@@ -113,3 +113,48 @@ def test_api_validates_dependencies(q):
         api.create_job(api.JobRequest(project="p", messages=[], depends_on=["nope"]))
     got = api.get_job(ok["id"])
     assert got.get("waiting_on") == [] and got["depends_on"] == ["20260101T000000Z-aaaa"]
+
+
+def test_purge_content_keeps_meta(q):
+    lib, worker = q
+    finish(lib, "20260101T000000Z-aaaa", "SECRET OUTPUT")
+    d = os.path.join(lib.QUEUE_ROOT, "done", "20260101T000000Z-aaaa")
+    lib.atomic_write_json(d, "output.json", {"content": "SECRET OUTPUT", "thinking": "SECRET THOUGHT",
+                                             "eval_count": 7})
+    job = lib.purge_content(d)
+    assert job["content_purged_at"]
+    blob = open(os.path.join(d, "input.json")).read() + open(os.path.join(d, "output.json")).read()
+    assert "SECRET" not in blob and "hi" not in lib.read_json(d, "input.json")["messages"]
+    assert lib.read_json(d, "output.json")["eval_count"] == 7
+    assert lib.read_json(d, "job.json")["id"] == "20260101T000000Z-aaaa"
+
+
+def test_purged_dependency_fails_dependent(q):
+    lib, worker = q
+    finish(lib, "20260101T000000Z-aaaa", "X")
+    lib.purge_content(os.path.join(lib.QUEUE_ROOT, "done", "20260101T000000Z-aaaa"))
+    make_job(lib, "20260101T000001Z-bbbb", "{{output:20260101T000000Z-aaaa}}",
+             depends_on=["20260101T000000Z-aaaa"])
+    worker.process_job(worker.claim_next_job())
+    err = lib.read_json(os.path.join(lib.QUEUE_ROOT, "failed", "20260101T000001Z-bbbb"), "job.json")["error"]
+    assert "was purged" in err
+
+
+def test_api_purge_rules(q):
+    pytest.importorskip("fastapi")
+    import importlib
+    import api
+    importlib.reload(api)
+    lib, _ = q
+    finish(lib, "20260101T000000Z-aaaa", "X")
+    make_job(lib, "20260101T000001Z-bbbb", "{{output:20260101T000000Z-aaaa}}",
+             depends_on=["20260101T000000Z-aaaa"])
+    with pytest.raises(api.HTTPException) as e:
+        api.purge_job("20260101T000000Z-aaaa")
+    assert e.value.status_code == 409 and "20260101T000001Z-bbbb" in e.value.detail
+    with pytest.raises(api.HTTPException) as e:
+        api.purge_job("20260101T000001Z-bbbb")
+    assert e.value.status_code == 409
+    os.rename(os.path.join(lib.QUEUE_ROOT, "queued", "20260101T000001Z-bbbb"),
+              os.path.join(lib.QUEUE_ROOT, "done", "20260101T000001Z-bbbb"))
+    assert api.purge_job("20260101T000000Z-aaaa")["content_purged_at"]
