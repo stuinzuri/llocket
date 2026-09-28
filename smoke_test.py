@@ -28,7 +28,10 @@ from lib import (
     QUEUE_ROOT,
 )
 
-MODEL = "orcarouter/Qwen3.8-27B-Uncensored:q8_0"
+# A tiny model, so the smoke test loads alongside whatever production model
+# is busy and never queues behind (or evicts) a long job. Must be pulled on
+# the Ollama instance first: `ollama pull qwen3:0.6b`.
+MODEL = os.environ.get("LLOCKET_SMOKE_MODEL", "qwen3:0.6b")
 PROJECT = "smoke-test"
 
 
@@ -61,7 +64,7 @@ def main() -> int:
         "messages": [
             {"role": "user", "content": "Reply with exactly the words: llocket smoke test ok"}
         ],
-        "sampling_options": {"num_predict": 40, "temperature": 0.2},
+        "sampling_options": {"num_predict": 40, "temperature": 0.2, "num_ctx": 2048},
     }
 
     # --- create: write fully in a not-yet-visible staging dir ---
@@ -81,7 +84,7 @@ def main() -> int:
     print(f"[{job_id}] claimed into running/")
 
     # --- execute against the real Ollama instance ---
-    print(f"[{job_id}] calling Ollama ({MODEL}) -- model isn't resident, this includes cold load...")
+    print(f"[{job_id}] calling Ollama ({MODEL}) -- includes cold load if not resident...")
     start = time.time()
     try:
         result = call_ollama(

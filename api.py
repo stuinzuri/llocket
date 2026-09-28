@@ -187,11 +187,17 @@ def cancel_job(job_id: str):
 def purge_job(job_id: str):
     state, path = find_job_dir(job_id)
     if state is None:
+        print(f"[{job_id}] purge refused: job not found", flush=True)
         raise HTTPException(status_code=404, detail="job not found")
     if state not in ("done", "failed"):
+        print(f"[{job_id}] purge refused: job is {state}", flush=True)
         raise HTTPException(status_code=409, detail=f"job is {state}; only finished jobs can be purged")
     pending = dependents_pending(job_id)
     if pending:
+        print(f"[{job_id}] purge refused: still needed by {', '.join(pending)}", flush=True)
         raise HTTPException(status_code=409, detail=f"still needed by pending job(s): {', '.join(pending)}")
     job = purge_content(path)
-    return {"id": job_id, "status": state, "content_purged_at": job["content_purged_at"]}
+    files = ", ".join(f"{f['file']} ({f['bytes_scrubbed']}B)" for f in job["content_purged_files"])
+    print(f"[{job_id}] purged content ({state}): {files or 'no content files'}", flush=True)
+    return {"id": job_id, "status": state, "content_purged_at": job["content_purged_at"],
+            "content_purged_files": job["content_purged_files"]}

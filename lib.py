@@ -204,29 +204,44 @@ def dependents_pending(job_id: str) -> list:
     return sorted(pending)
 
 
+def _scrub(path: str) -> int:
+    """Best effort: overwrite a file's bytes in place with zeros and fsync
+    before it's replaced or removed. On copy-on-write or snapshotting
+    storage the old blocks may still survive; this narrows, not closes, the
+    window. Returns the number of bytes overwritten."""
+    size = os.path.getsize(path)
+    with open(path, "r+b") as f:
+        f.write(b"\0" * size)
+        f.flush()
+        os.fsync(f.fileno())
+    return size
+
+
 def purge_content(job_dir: str) -> dict:
     """Drop a finished job's content -- prompt messages, output text,
-    thinking -- keeping its metadata (job.json, stats). Files are replaced
-    via write-then-rename, so the old content's blocks are freed, not
-    overwritten (no secure wipe; NAS snapshots, if enabled, may keep them)."""
-    input_path = os.path.join(job_dir, "input.json")
-    if os.path.isfile(input_path):
-        doc = read_json(job_dir, "input.json")
-        doc["messages"] = []
+    thinking -- keeping its metadata (job.json, stats). Each content file is
+    scrubbed (zero-overwritten, fsynced) and then replaced by a copy without
+    the content, or removed. job.json records when and what was purged."""
+    purged = []
+    for name, keys in (("input.json", {"messages": []}),
+                       ("output.json", {"content": "", "thinking": None})):
+        path = os.path.join(job_dir, name)
+        if not os.path.isfile(path):
+            continue
+        doc = read_json(job_dir, name)
+        doc.update(keys)
         doc["content_purged"] = True
-        atomic_write_json(job_dir, "input.json", doc)
-    output_path = os.path.join(job_dir, "output.json")
-    if os.path.isfile(output_path):
-        doc = read_json(job_dir, "output.json")
-        doc["content"] = ""
-        doc["thinking"] = None
-        doc["content_purged"] = True
-        atomic_write_json(job_dir, "output.json", doc)
-    for extra in ("response.raw.jsonl",):
-        path = os.path.join(job_dir, extra)
+        nbytes = _scrub(path)
+        atomic_write_json(job_dir, name, doc)
+        purged.append({"file": name, "bytes_scrubbed": nbytes})
+    for name in ("response.raw.jsonl",):
+        path = os.path.join(job_dir, name)
         if os.path.isfile(path):
+            nbytes = _scrub(path)
             os.remove(path)
+            purged.append({"file": name, "bytes_scrubbed": nbytes, "removed": True})
     job = read_json(job_dir, "job.json")
     job["content_purged_at"] = now_iso()
+    job["content_purged_files"] = purged
     atomic_write_json(job_dir, "job.json", job)
     return job

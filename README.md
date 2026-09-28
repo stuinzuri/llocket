@@ -61,7 +61,10 @@ pre-claim, race-checked). `submit_job.py` is manual test scaffolding
 for exercising the worker without the API -- not a real integration
 point. `smoke_test.py` runs the full lifecycle (create -> publish ->
 claim -> call Ollama -> write output -> complete) against a real
-queue and a real Ollama instance.
+queue and a real Ollama instance. It calls Ollama directly (not via the
+worker) with a tiny model (`$LLOCKET_SMOKE_MODEL`, default `qwen3:0.6b`,
+pulled once) at a small `num_ctx`, so it loads next to a busy production
+model and never waits behind a long job.
 
 ## Running it
 
@@ -119,8 +122,14 @@ call as soon as they've safely stored a result, so sensitive text sits
 in the queue only while a job is in flight. Refused (409) while the job
 is queued/running or while a pending job still depends on its output. A
 dependent that runs after its dependency was purged fails with a clear
-error. Files are replaced, not securely wiped; storage snapshots (e.g.
-on a NAS) may retain earlier versions.
+error naming when it was purged.
+
+Each content file is scrubbed first (zero-overwritten in place and
+fsynced), then replaced or removed. That's best effort: on copy-on-write
+or snapshotting storage the old blocks can survive until the storage
+reclaims them. `job.json` records `content_purged_at` and
+`content_purged_files` (file, bytes scrubbed); the API logs every purge
+and every refused purge (with the reason) to its stdout log.
 
 ## Retention
 

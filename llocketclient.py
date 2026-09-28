@@ -123,6 +123,8 @@ def _summary(job: dict) -> str:
         extra = f" waiting_on={','.join(job['waiting_on'])}"
     if job.get("error"):
         extra += f" error={job['error']}"
+    if job.get("content_purged_at"):
+        extra += f" content_purged_at={job['content_purged_at']}"
     return f"{job['id']} {job.get('status')} {job.get('project')}/{job.get('purpose')}{extra}"
 
 

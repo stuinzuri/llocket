@@ -123,6 +123,8 @@ def test_purge_content_keeps_meta(q):
                                              "eval_count": 7})
     job = lib.purge_content(d)
     assert job["content_purged_at"]
+    assert {f["file"] for f in job["content_purged_files"]} == {"input.json", "output.json"}
+    assert all(f["bytes_scrubbed"] > 0 for f in job["content_purged_files"])
     blob = open(os.path.join(d, "input.json")).read() + open(os.path.join(d, "output.json")).read()
     assert "SECRET" not in blob and "hi" not in lib.read_json(d, "input.json")["messages"]
     assert lib.read_json(d, "output.json")["eval_count"] == 7
@@ -137,7 +139,7 @@ def test_purged_dependency_fails_dependent(q):
              depends_on=["20260101T000000Z-aaaa"])
     worker.process_job(worker.claim_next_job())
     err = lib.read_json(os.path.join(lib.QUEUE_ROOT, "failed", "20260101T000001Z-bbbb"), "job.json")["error"]
-    assert "was purged" in err
+    assert "was purged" in err and "resubmit" in err
 
 
 def test_api_purge_rules(q):
