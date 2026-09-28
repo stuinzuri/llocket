@@ -9,6 +9,8 @@ isn't the source of truth here).
 
 import json
 import os
+import re
+import shutil
 import time
 import urllib.error
 import urllib.request
@@ -20,6 +22,16 @@ import urllib.request
 # deployment, which sets neither var.
 QUEUE_ROOT = os.environ.get("LLOCKET_QUEUE_ROOT", os.path.expanduser("~/llocket/nas/queue"))
 OLLAMA_HOST = os.environ.get("LLOCKET_OLLAMA_HOST", "http://localhost:11437")
+# Finished jobs (done/ and failed/) are transient: removed this many days
+# after their last update. 0 disables pruning.
+RETENTION_DAYS = float(os.environ.get("LLOCKET_RETENTION_DAYS", "14"))
+
+# A job may reference the output of jobs it depends on:
+#   "{{output:<job_id>}}" anywhere in a message's content is replaced, when
+#   the job is claimed, by that dependency's output content (the reply text;
+#   native thinking is a separate field and never substituted).
+PLACEHOLDER = re.compile(r"\{\{output:([0-9A-Za-z_-]+)\}\}")
+STATES = ("queued", "running", "done", "failed")
 
 
 def now_iso() -> str:
@@ -118,3 +130,58 @@ def call_ollama(
         "prompt_eval_duration": final.get("prompt_eval_duration"),
         "eval_duration": final.get("eval_duration"),
     }
+
+
+def job_state(job_id: str):
+    """(state, path) of a job by id, or (None, None) if it doesn't exist."""
+    for state in STATES:
+        path = os.path.join(QUEUE_ROOT, state, job_id)
+        if os.path.isdir(path):
+            return state, path
+    return None, None
+
+
+def placeholders_in(messages: list) -> set:
+    found = set()
+    for m in messages:
+        content = m.get("content") if isinstance(m, dict) else None
+        if isinstance(content, str):
+            found.update(PLACEHOLDER.findall(content))
+    return found
+
+
+def substitute_outputs(messages: list, outputs: dict) -> list:
+    """Copy of messages with every {{output:<id>}} replaced by outputs[id]."""
+    def repl(m):
+        return outputs[m.group(1)]
+    out = []
+    for m in messages:
+        m = dict(m)
+        if isinstance(m.get("content"), str):
+            m["content"] = PLACEHOLDER.sub(repl, m["content"])
+        out.append(m)
+    return out
+
+
+def prune_finished(retention_days: float = RETENTION_DAYS, now: float = None) -> list:
+    """Remove done/ and failed/ jobs whose last update is older than
+    retention_days. Returns the removed job ids."""
+    if retention_days <= 0:
+        return []
+    cutoff = (now if now is not None else time.time()) - retention_days * 86400
+    removed = []
+    for state in ("done", "failed"):
+        root = os.path.join(QUEUE_ROOT, state)
+        if not os.path.isdir(root):
+            continue
+        for job_id in os.listdir(root):
+            path = os.path.join(root, job_id)
+            try:
+                updated = read_json(path, "job.json").get("updated_at")
+                ts = time.mktime(time.strptime(updated, "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
+            except (OSError, ValueError, TypeError):
+                ts = os.path.getmtime(path)
+            if ts < cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+                removed.append(job_id)
+    return removed

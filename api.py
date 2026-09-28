@@ -6,7 +6,8 @@ from the queue directories; it never touches running/ itself and has no
 idea whether a worker is even alive. The two processes are decoupled
 through the filesystem, exactly like everything else in this design.
 
-    POST   /jobs        enqueue a job, returns its id
+    POST   /jobs        enqueue a job, returns its id (optional depends_on +
+                        {{output:<id>}} placeholders, see lib.PLACEHOLDER)
     GET    /jobs/{id}   status + result (searches all four state dirs)
     GET    /jobs         list jobs, optional ?project=&status= filters
     DELETE /jobs/{id}   cancel -- only possible while still queued
@@ -19,15 +20,15 @@ import os
 import random
 import string
 import time
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from lib import OLLAMA_HOST, QUEUE_ROOT, atomic_write_json, ensure_queue_dirs, now_iso, read_json
+from lib import (OLLAMA_HOST, QUEUE_ROOT, STATES, atomic_write_json, ensure_queue_dirs, job_state, now_iso,
+                 placeholders_in, read_json)
 
 DEFAULT_MODEL = "orcarouter/Qwen3.8-27B-Uncensored:q8_0"
-STATES = ("queued", "running", "done", "failed")
 
 app = FastAPI(title="Llocket")
 
@@ -41,6 +42,7 @@ class JobRequest(BaseModel):
     think: bool = False
     sampling_options: Optional[dict] = None
     max_attempts: int = 3
+    depends_on: List[str] = []
 
 
 def new_job_id() -> str:
@@ -50,15 +52,12 @@ def new_job_id() -> str:
 
 
 def find_job_dir(job_id: str):
-    """Returns (state, path) for a job id by checking each state dir --
-    the queue is small enough (single sequential worker, no high job
-    volume) that this is fine as a plain existence check per state rather
-    than needing an index. Returns (None, None) if not found anywhere."""
-    for state in STATES:
-        path = os.path.join(QUEUE_ROOT, state, job_id)
-        if os.path.isdir(path):
-            return state, path
-    return None, None
+    """Returns (state, path) for a job id, or (None, None) if not found."""
+    return job_state(job_id)
+
+
+def waiting_on(job: dict) -> list:
+    return [d for d in job.get("depends_on") or [] if job_state(d)[0] != "done"]
 
 
 @app.on_event("startup")
@@ -68,6 +67,17 @@ def _startup():
 
 @app.post("/jobs")
 def create_job(req: JobRequest):
+    deps = list(dict.fromkeys(req.depends_on))
+    refs = placeholders_in(req.messages)
+    undeclared = sorted(refs - set(deps))
+    if undeclared:
+        raise HTTPException(status_code=422, detail=f"placeholders reference jobs not in depends_on: {undeclared}")
+    for d in deps:
+        state, _ = job_state(d)
+        if state is None:
+            raise HTTPException(status_code=422, detail=f"dependency {d} not found")
+        if state == "failed":
+            raise HTTPException(status_code=409, detail=f"dependency {d} already failed")
     job_id = new_job_id()
     job = {
         "id": job_id,
@@ -81,6 +91,7 @@ def create_job(req: JobRequest):
         "model": req.model,
         "host": req.host,
         "error": None,
+        "depends_on": deps,
     }
     input_doc = {
         "messages": req.messages,
@@ -112,6 +123,8 @@ def get_job(job_id: str):
     # time, so a running job's job.json can still say "queued" for its
     # whole runtime otherwise.
     result["status"] = state
+    if state == "queued" and job.get("depends_on"):
+        result["waiting_on"] = waiting_on(job)
     if state == "done":
         result["output"] = read_json(path, "output.json")
     return result
@@ -133,6 +146,8 @@ def list_jobs(project: Optional[str] = None, status: Optional[str] = None):
             if project and job.get("project") != project:
                 continue
             job["status"] = state  # directory location is authoritative, see get_job()
+            if state == "queued" and job.get("depends_on"):
+                job["waiting_on"] = waiting_on(job)
             jobs.append(job)
     return jobs
 

@@ -82,11 +82,59 @@ Ollama itself runs cleanly as a boot-time LaunchDaemon on macOS -- it
 only reads local model files, never a network mount, so it's unaffected
 by the constraint described below.
 
+## Dependent jobs (chains)
+
+A job can declare `depends_on: [<job_id>, ...]` and reference a
+dependency's output anywhere in its message content as
+`{{output:<job_id>}}`. The worker only claims it once every dependency
+is `done`, then substitutes each placeholder with that dependency's
+output text (the reply content -- native thinking is a separate field
+and never substituted). The stored `input.json` keeps the placeholders;
+`job.json` records `resolved_dependencies` (id -> substituted length).
+
+- A job waiting on dependencies stays in `queued/` (the API reports
+  `waiting_on`); runnable jobs behind it are not blocked.
+- If a dependency fails (or is missing), the dependent fails straight
+  away with `dependency failed or missing: ...`.
+- The API rejects placeholders that aren't declared in `depends_on`,
+  unknown dependencies (422) and already-failed ones (409).
+
+This lets a client submit a whole multi-step chain up front and
+disconnect: the chain runs to completion server-side.
+
+## Client
+
+`llocketclient.py` -- stdlib-only client + CLI (`submit`, `job`, `jobs`,
+`cancel`, `wait`; `python3 llocketclient.py --api URL list|status|wait|cancel`).
+`wait()` tolerates transient network errors; the job never depends on
+the client staying connected.
+
+## Retention
+
+Finished jobs are transient: the worker removes `done/` and `failed/`
+jobs `LLOCKET_RETENTION_DAYS` (default 14) days after their last update,
+checked hourly. `0` disables pruning. Queued/running jobs are never
+pruned.
+
 ## A macOS constraint worth knowing
 
-**LaunchDaemons and LaunchAgents cannot access an NFS mount, in any
-configuration -- this is macOS's TCC privacy system working as
-designed, not a bug or a configuration mistake.**
+**Resolved 2026-09-28: granting Full Disk Access (System Settings ->
+Privacy & Security) to `/usr/bin/python3` *and* to the Command Line
+Tools `Python.app` it hands off to lets the worker and API run as
+boot-time LaunchDaemons with the queue on NFS.** Both entries were
+needed; the bundle alone was not enough (launchd starts
+`/usr/bin/python3`). Trade-off: every script run with that interpreter
+gets Full Disk Access -- acceptable on a dedicated service machine.
+The investigation below predates that finding and is kept for context.
+
+Also mount the share *soft* with a dead-server timeout (e.g.
+`soft,intr,timeo=30,retrans=3,deadtimeout=60`): a default (hard) NFS
+mount turns any NAS/network hiccup into processes stuck in the kernel
+that only a reboot clears.
+
+Original finding: **LaunchDaemons and LaunchAgents cannot access an
+NFS mount, in any configuration tried -- macOS's TCC privacy system
+working as designed.**
 
 ### What doesn't work
 
@@ -221,9 +269,6 @@ interest to justify spinning it out further.
 
 ## Known limitations
 
-The job-queue REST API and worker are built and validated end-to-end
-(normal completion, crash recovery, capped-retry-to-failed, and the
-full REST round trip) but are **not currently running as boot-time
-services** -- see "A macOS constraint worth knowing" above. Ollama
-itself is the only piece of this that's actually daemonized reliably
-right now.
+The job-queue REST API and worker run as boot-time LaunchDaemons under
+the service account (see "A macOS constraint worth knowing" for the
+Full Disk Access grant this needs). Single sequential worker by design.

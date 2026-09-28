@@ -28,14 +28,19 @@ import urllib.error
 from lib import (
     OLLAMA_HOST,
     QUEUE_ROOT,
+    RETENTION_DAYS,
     atomic_write_json,
     call_ollama,
     ensure_queue_dirs,
+    job_state,
     now_iso,
+    prune_finished,
     read_json,
+    substitute_outputs,
 )
 
 POLL_INTERVAL_SECONDS = 5
+PRUNE_INTERVAL_SECONDS = 3600
 
 
 def _requeue_or_fail(job_dir: str, job: dict, reason: str) -> None:
@@ -89,13 +94,42 @@ def recover_orphans() -> None:
         _requeue_or_fail(job_dir, job, "orphaned in running/ (worker restarted or crashed mid-job)")
 
 
+def _fail_unrunnable(job_dir: str, job: dict, reason: str) -> None:
+    job["status"] = "failed"
+    job["error"] = reason
+    job["updated_at"] = now_iso()
+    atomic_write_json(job_dir, "job.json", job)
+    os.rename(job_dir, os.path.join(QUEUE_ROOT, "failed", job["id"]))
+    print(f"[{job['id']}] -> failed/: {reason}")
+
+
 def claim_next_job() -> str | None:
     """Returns the path to a freshly-claimed job directory in running/, or
-    None if queued/ is empty. FIFO by job id."""
+    None if nothing is runnable. FIFO by job id among *runnable* jobs: a job
+    whose dependencies aren't all done yet is skipped (it waits, later jobs
+    may pass it); a job with a failed or missing dependency is failed
+    straight away, so a broken chain never blocks the queue."""
     queued_root = os.path.join(QUEUE_ROOT, "queued")
     candidates = sorted(os.listdir(queued_root))
     for job_id in candidates:
         src = os.path.join(queued_root, job_id)
+        try:
+            deps = read_json(src, "job.json").get("depends_on") or []
+        except (FileNotFoundError, ValueError):
+            continue
+        if deps:
+            states = {d: job_state(d)[0] for d in deps}
+            bad = [d for d, st in states.items() if st in (None, "failed")]
+            if bad:
+                try:
+                    job = read_json(src, "job.json")
+                    _fail_unrunnable(src, job, "dependency failed or missing: " + ", ".join(
+                        f"{d} ({states[d] or 'missing'})" for d in bad))
+                except (FileNotFoundError, ValueError, OSError):
+                    pass
+                continue
+            if any(st != "done" for st in states.values()):
+                continue  # still waiting on a dependency
         dst = os.path.join(QUEUE_ROOT, "running", job_id)
         try:
             os.rename(src, dst)
@@ -108,18 +142,39 @@ def claim_next_job() -> str | None:
     return None
 
 
+def resolve_dependencies(job: dict, messages: list) -> list:
+    """Substitute {{output:<id>}} placeholders with the dependencies' output
+    content. Records what was substituted in job['resolved_dependencies']."""
+    deps = job.get("depends_on") or []
+    if not deps:
+        return messages
+    outputs = {}
+    for d in deps:
+        state, path = job_state(d)
+        if state != "done":
+            raise RuntimeError(f"dependency {d} is {state or 'missing'} at claim time")
+        outputs[d] = read_json(path, "output.json").get("content", "")
+    job["resolved_dependencies"] = {d: len(v) for d, v in outputs.items()}
+    return substitute_outputs(messages, outputs)
+
+
 def process_job(job_dir: str) -> None:
     job = read_json(job_dir, "job.json")
     job_id = job["id"]
     input_doc = read_json(job_dir, "input.json")
 
     print(f"[{job_id}] running ({job['model']})")
+    try:
+        messages = resolve_dependencies(job, input_doc["messages"])
+    except (RuntimeError, OSError, ValueError, KeyError) as e:
+        _fail_unrunnable(job_dir, job, f"could not resolve dependencies: {e}")
+        return
     start = time.time()
     try:
         result = call_ollama(
             job["host"],
             job["model"],
-            input_doc["messages"],
+            messages,
             think=input_doc.get("think", False),
             options=input_doc.get("sampling_options"),
         )
@@ -152,8 +207,18 @@ def main() -> int:
     ensure_queue_dirs()
     recover_orphans()
 
-    print(f"worker started, polling every {POLL_INTERVAL_SECONDS}s, host={OLLAMA_HOST}")
+    print(f"worker started, polling every {POLL_INTERVAL_SECONDS}s, host={OLLAMA_HOST}, "
+          f"retention {RETENTION_DAYS} days")
+    last_prune = 0.0
     while True:
+        if time.time() - last_prune > PRUNE_INTERVAL_SECONDS:
+            last_prune = time.time()
+            try:
+                removed = prune_finished()
+                if removed:
+                    print(f"pruned {len(removed)} finished job(s) older than {RETENTION_DAYS} days")
+            except OSError as e:
+                print(f"prune failed: {e}")
         job_dir = claim_next_job()
         if job_dir is None:
             time.sleep(POLL_INTERVAL_SECONDS)
