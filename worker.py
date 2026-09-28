@@ -169,6 +169,9 @@ def process_job(job_dir: str) -> None:
     input_doc = read_json(job_dir, "input.json")
 
     print(f"[{job_id}] running ({job['model']})")
+    # when the worker picked it up -- lets clients tell how long it's been running
+    job["started_at"] = now_iso()
+    atomic_write_json(job_dir, "job.json", job)
     try:
         messages = resolve_dependencies(job, input_doc["messages"])
     except (RuntimeError, OSError, ValueError, KeyError) as e:

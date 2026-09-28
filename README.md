@@ -112,6 +112,12 @@ disconnect: the chain runs to completion server-side.
 `wait()` tolerates transient network errors; the job never depends on
 the client staying connected.
 
+## Job timing
+
+The worker stamps `started_at` into `job.json` when it picks a job up, so a
+client can tell how long the running job has been going (`created_at` is
+when it was submitted; `updated_at` when it last changed state).
+
 ## Purging content
 
 `POST /jobs/{id}/purge` (client: `purge()`) empties a finished job's
