@@ -150,6 +150,17 @@ def placeholders_in(messages: list) -> set:
     return found
 
 
+def input_chars(messages: list) -> int:
+    """Characters of message text as submitted, not counting {{output:<id>}}
+    placeholders (their size isn't known until the dependency finishes)."""
+    total = 0
+    for m in messages:
+        content = m.get("content") if isinstance(m, dict) else None
+        if isinstance(content, str):
+            total += len(PLACEHOLDER.sub("", content))
+    return total
+
+
 def substitute_outputs(messages: list, outputs: dict) -> list:
     """Copy of messages with every {{output:<id>}} replaced by outputs[id]."""
     def repl(m):

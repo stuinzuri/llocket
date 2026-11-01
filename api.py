@@ -30,7 +30,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from lib import (OLLAMA_HOST, QUEUE_ROOT, STATES, atomic_write_json, dependents_pending, ensure_queue_dirs,
-                 job_state, now_iso, placeholders_in, purge_content, read_json)
+                 input_chars, job_state, now_iso, placeholders_in, purge_content, read_json)
 
 DEFAULT_MODEL = "orcarouter/Qwen3.8-27B-Uncensored:q8_0"
 
@@ -96,6 +96,9 @@ def create_job(req: JobRequest):
         "host": req.host,
         "error": None,
         "depends_on": deps,
+        # prompt size, for clients estimating run time (see README "Job timing")
+        "input_chars": input_chars(req.messages),
+        "input_placeholders": len(refs),
     }
     input_doc = {
         "messages": req.messages,

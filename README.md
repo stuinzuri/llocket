@@ -117,6 +117,10 @@ the client staying connected.
 The worker stamps `started_at` into `job.json` when it picks a job up, so a
 client can tell how long the running job has been going (`created_at` is
 when it was submitted; `updated_at` when it last changed state).
+`input_chars` is the size of the submitted message text (placeholders
+not counted) and `input_placeholders` how many `{{output:<id>}}`
+placeholders it has, so a client can estimate how long a job will take
+before it starts. Jobs submitted before these fields existed lack them.
 
 ## Purging content
 

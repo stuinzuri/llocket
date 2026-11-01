@@ -160,3 +160,9 @@ def test_api_purge_rules(q):
     os.rename(os.path.join(lib.QUEUE_ROOT, "queued", "20260101T000001Z-bbbb"),
               os.path.join(lib.QUEUE_ROOT, "done", "20260101T000001Z-bbbb"))
     assert api.purge_job("20260101T000000Z-aaaa")["content_purged_at"]
+
+
+def test_input_chars_skips_placeholders(q):
+    lib, _ = q
+    msgs = [{"role": "system", "content": "abc"}, {"role": "user", "content": "de{{output:J1}}f"}]
+    assert lib.input_chars(msgs) == 6
