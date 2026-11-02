@@ -71,10 +71,14 @@ class Llocket:
     def submit(self, project: str, messages: list, *, model: Optional[str] = None,
                purpose: Optional[str] = None, think: bool = False,
                sampling_options: Optional[dict] = None, depends_on: Optional[List[str]] = None,
-               max_attempts: int = 3) -> str:
+               max_attempts: int = 3, priority: int = 0) -> str:
+        """priority: higher runs before lower among queued jobs (default 0);
+        it never interrupts a running job."""
         body = {"project": project, "messages": messages, "purpose": purpose, "think": think,
                 "sampling_options": sampling_options or {}, "depends_on": depends_on or [],
                 "max_attempts": max_attempts}
+        if priority:
+            body["priority"] = priority
         if model:
             body["model"] = model
         return self._request("POST", "/jobs", body)["id"]

@@ -47,6 +47,7 @@ class JobRequest(BaseModel):
     sampling_options: Optional[dict] = None
     max_attempts: int = 3
     depends_on: List[str] = []
+    priority: int = 0          # higher runs first among runnable jobs; see README "Priority"
 
 
 def new_job_id() -> str:
@@ -96,6 +97,7 @@ def create_job(req: JobRequest):
         "host": req.host,
         "error": None,
         "depends_on": deps,
+        "priority": req.priority,
         # prompt size, for clients estimating run time (see README "Job timing")
         "input_chars": input_chars(req.messages),
         "input_placeholders": len(refs),

@@ -103,15 +103,28 @@ def _fail_unrunnable(job_dir: str, job: dict, reason: str) -> None:
     print(f"[{job['id']}] -> failed/: {reason}")
 
 
+def _queue_order(queued_root: str) -> list:
+    """Queued job ids, highest priority first, then FIFO by job id (ids
+    start with their UTC timestamp). A job without a priority counts as 0."""
+    keyed = []
+    for job_id in os.listdir(queued_root):
+        try:
+            prio = int(read_json(os.path.join(queued_root, job_id), "job.json").get("priority") or 0)
+        except (FileNotFoundError, ValueError, TypeError):
+            prio = 0
+        keyed.append((-prio, job_id))
+    return [job_id for _p, job_id in sorted(keyed)]
+
+
 def claim_next_job() -> str | None:
     """Returns the path to a freshly-claimed job directory in running/, or
-    None if nothing is runnable. FIFO by job id among *runnable* jobs: a job
-    whose dependencies aren't all done yet is skipped (it waits, later jobs
-    may pass it); a job with a failed or missing dependency is failed
-    straight away, so a broken chain never blocks the queue."""
+    None if nothing is runnable. Highest priority first, FIFO by job id
+    within a priority, among *runnable* jobs: a job whose dependencies
+    aren't all done yet is skipped (it waits, later jobs may pass it); a
+    job with a failed or missing dependency is failed straight away, so a
+    broken chain never blocks the queue. A running job is never preempted."""
     queued_root = os.path.join(QUEUE_ROOT, "queued")
-    candidates = sorted(os.listdir(queued_root))
-    for job_id in candidates:
+    for job_id in _queue_order(queued_root):
         src = os.path.join(queued_root, job_id)
         try:
             deps = read_json(src, "job.json").get("depends_on") or []

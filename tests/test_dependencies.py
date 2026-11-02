@@ -4,13 +4,14 @@ import os
 import pytest
 
 
-def make_job(lib, job_id, content="hi", depends_on=None, state="queued"):
+def make_job(lib, job_id, content="hi", depends_on=None, state="queued", priority=None):
     d = os.path.join(lib.QUEUE_ROOT, state, job_id)
     os.makedirs(d)
     lib.atomic_write_json(d, "job.json", {
         "id": job_id, "project": "p", "purpose": None, "created_at": lib.now_iso(),
         "updated_at": lib.now_iso(), "status": state, "attempts": 0, "max_attempts": 3,
-        "model": "m", "host": "h", "error": None, "depends_on": depends_on or []})
+        "model": "m", "host": "h", "error": None, "depends_on": depends_on or [],
+        **({"priority": priority} if priority is not None else {})})
     lib.atomic_write_json(d, "input.json", {"messages": [{"role": "user", "content": content}],
                                             "think": False, "sampling_options": {}})
     return d
@@ -166,3 +167,23 @@ def test_input_chars_skips_placeholders(q):
     lib, _ = q
     msgs = [{"role": "system", "content": "abc"}, {"role": "user", "content": "de{{output:J1}}f"}]
     assert lib.input_chars(msgs) == 6
+
+
+def test_priority_runs_first_then_fifo_and_never_skips_dependencies(q):
+    lib, worker = q
+    make_job(lib, "20260101T000000Z-aaaa", "batch 1")                       # no priority: counts as 0
+    make_job(lib, "20260101T000001Z-bbbb", "batch 2", priority=0)
+    make_job(lib, "20260101T000002Z-cccc", "interactive", priority=10)
+    make_job(lib, "20260101T000003Z-dddd", "needs batch 1", priority=20,
+             depends_on=["20260101T000000Z-aaaa"])                         # not runnable yet
+    order = []
+    while True:
+        claimed = worker.claim_next_job()
+        if claimed is None:
+            break
+        job_id = os.path.basename(claimed)
+        order.append(job_id[-4:])
+        finish_dir = os.path.join(lib.QUEUE_ROOT, "done", job_id)
+        lib.atomic_write_json(claimed, "output.json", {"content": "x"})
+        os.rename(claimed, finish_dir)
+    assert order == ["cccc", "aaaa", "dddd", "bbbb"]

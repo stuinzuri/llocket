@@ -107,6 +107,17 @@ and never substituted). The stored `input.json` keeps the placeholders;
 This lets a client submit a whole multi-step chain up front and
 disconnect: the chain runs to completion server-side.
 
+## Priority
+
+A job can set `priority` (an integer, default 0). The worker takes the
+highest-priority runnable job first, and the oldest first within a
+priority -- so short interactive jobs can be submitted at, say, 10 and
+run ahead of a long batch queued at 0. Nothing is preempted: a running
+job always finishes first. A waiting dependent job keeps its own priority
+(it doesn't inherit its dependency's). There is no aging, so a steady
+stream of high-priority jobs can hold back low-priority ones; keep high
+priorities for short, occasional work.
+
 ## Client
 
 `llocketclient.py` -- stdlib-only client + CLI (`submit`, `job`, `jobs`,
