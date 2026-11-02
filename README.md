@@ -1,5 +1,7 @@
 # Llocket
 
+<img src="assets/logo.png" alt="Llocket logo" width="96">
+
 A durable, async job-ticket queue for Ollama generation requests -- a
 llama-themed pun on "docket" (a list of cases queued for hearing, one at
 a time, in order), which fits a single sequential worker processing
