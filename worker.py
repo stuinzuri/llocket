@@ -69,6 +69,24 @@ def _requeue_or_fail(job_dir: str, job: dict, reason: str) -> None:
     os.rename(job_dir, dest)
 
 
+def output_doc(result: dict) -> dict:
+    """What a finished job keeps from Ollama's /api/chat response: the
+    message plus its counts and timings (nanoseconds, as Ollama reports
+    them). eval_duration is generation time alone, so tokens per second is
+    eval_count / eval_duration."""
+    return {
+        "content": result.get("message", {}).get("content", ""),
+        "thinking": result.get("message", {}).get("thinking"),
+        "done_reason": result.get("done_reason"),
+        "prompt_eval_count": result.get("prompt_eval_count"),
+        "eval_count": result.get("eval_count"),
+        "total_duration_ns": result.get("total_duration"),
+        "load_duration_ns": result.get("load_duration"),
+        "prompt_eval_duration_ns": result.get("prompt_eval_duration"),
+        "eval_duration_ns": result.get("eval_duration"),
+    }
+
+
 def recover_orphans() -> None:
     """Run once at startup (every startup, not just after a known crash --
     recovery is the normal path, not a rare branch). Anything sitting in
@@ -205,15 +223,7 @@ def process_job(job_dir: str) -> None:
     elapsed = time.time() - start
     print(f"[{job_id}] responded in {elapsed:.1f}s, done_reason={result.get('done_reason')}")
 
-    output_doc = {
-        "content": result.get("message", {}).get("content", ""),
-        "thinking": result.get("message", {}).get("thinking"),
-        "done_reason": result.get("done_reason"),
-        "prompt_eval_count": result.get("prompt_eval_count"),
-        "eval_count": result.get("eval_count"),
-        "total_duration_ns": result.get("total_duration"),
-    }
-    atomic_write_json(job_dir, "output.json", output_doc)
+    atomic_write_json(job_dir, "output.json", output_doc(result))
 
     job["status"] = "done"
     job["updated_at"] = now_iso()

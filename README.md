@@ -29,7 +29,7 @@ queue/
   .incoming/<id>/          -- being written, not yet visible to the worker
   queued/<id>/              -- job.json, input.json
   running/<id>/              -- claimed by the worker
-  done/<id>/                 -- + output.json, response.raw.jsonl
+  done/<id>/                 -- + output.json (message, token counts, timings in ns), response.raw.jsonl
   failed/<id>/               -- + error info
 ```
 

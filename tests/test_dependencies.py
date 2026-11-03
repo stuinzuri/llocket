@@ -187,3 +187,13 @@ def test_priority_runs_first_then_fifo_and_never_skips_dependencies(q):
         lib.atomic_write_json(claimed, "output.json", {"content": "x"})
         os.rename(claimed, finish_dir)
     assert order == ["cccc", "aaaa", "dddd", "bbbb"]
+
+
+def test_output_doc_keeps_timings(q):
+    lib, worker = q
+    doc = worker.output_doc({"message": {"content": "x"}, "eval_count": 50, "eval_duration": 2_000_000_000,
+                             "prompt_eval_count": 10, "prompt_eval_duration": 500_000_000,
+                             "load_duration": 100, "total_duration": 3_000_000_000, "done_reason": "stop"})
+    assert doc["eval_duration_ns"] == 2_000_000_000 and doc["prompt_eval_duration_ns"] == 500_000_000
+    assert doc["load_duration_ns"] == 100 and doc["total_duration_ns"] == 3_000_000_000
+    assert doc["eval_count"] / (doc["eval_duration_ns"] / 1e9) == 25.0
