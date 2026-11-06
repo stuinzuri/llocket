@@ -33,6 +33,24 @@ RETENTION_DAYS = float(os.environ.get("LLOCKET_RETENTION_DAYS", "14"))
 PLACEHOLDER = re.compile(r"\{\{output:([0-9A-Za-z_-]+)\}\}")
 STATES = ("queued", "running", "done", "failed")
 
+# Lanes (see README "Lanes"): "standard" jobs run in priority order; a
+# "backlog" job runs only when no standard job is runnable, and is capped at
+# BACKLOG_MAX_RUNTIME_S so the work it holds up waits at most that long.
+LANES = ("standard", "backlog")
+BACKLOG_MAX_RUNTIME_S = float(os.environ.get("LLOCKET_BACKLOG_MAX_RUNTIME_S", "600"))
+
+
+class RuntimeLimitExceeded(Exception):
+    """A call ran past its job's max_runtime_s and was cut off."""
+
+
+def effective_max_runtime(lane: str, requested=None):
+    """Seconds a job may run, or None for no limit. Backlog jobs always have
+    one, at most BACKLOG_MAX_RUNTIME_S; a standard job only if it asked."""
+    if lane == "backlog":
+        return min(float(requested), BACKLOG_MAX_RUNTIME_S) if requested else BACKLOG_MAX_RUNTIME_S
+    return float(requested) if requested else None
+
 
 def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -67,6 +85,7 @@ def call_ollama(
     think: bool = False,
     options: dict = None,
     stall_timeout: float = 600.0,
+    max_runtime: float = None,
 ) -> dict:
     """Streaming chat call -- NOT the non-streaming form this started as.
     A real job can run tens of minutes to over an hour; a single
@@ -94,7 +113,11 @@ def call_ollama(
     Returns a dict shaped like Ollama's own non-streaming response
     (aggregated message.content/message.thinking, done_reason, and the
     usual stats fields) so callers don't need to know streaming was used
-    internally."""
+    internally.
+
+    `max_runtime` (seconds, None = no limit) caps the whole call, model
+    load included: past it the stream is closed (Ollama stops generating)
+    and RuntimeLimitExceeded is raised."""
     payload = {"model": model, "messages": messages, "stream": True, "think": think}
     if options:
         payload["options"] = options
@@ -103,11 +126,25 @@ def call_ollama(
         f"{host}/api/chat", data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}
     )
 
+    started = time.monotonic()
+    timeout = min(stall_timeout, max_runtime) if max_runtime else stall_timeout
+    try:
+        return _stream_chat(req, timeout, started, max_runtime)
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        # a read that timed out because the runtime cap ran out (not a stall)
+        if max_runtime and time.monotonic() - started >= max_runtime - 1:
+            raise RuntimeLimitExceeded(f"stopped after {max_runtime:.0f}s (the job's max_runtime_s)") from e
+        raise
+
+
+def _stream_chat(req, timeout: float, started: float, max_runtime) -> dict:
     content_parts = []
     thinking_parts = []
     final: dict = {}
-    with urllib.request.urlopen(req, timeout=stall_timeout) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         for line in resp:
+            if max_runtime and time.monotonic() - started > max_runtime:
+                raise RuntimeLimitExceeded(f"stopped after {max_runtime:.0f}s (the job's max_runtime_s)")
             line = line.strip()
             if not line:
                 continue

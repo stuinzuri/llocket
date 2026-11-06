@@ -118,6 +118,33 @@ job always finishes first. A waiting dependent job keeps its own priority
 stream of high-priority jobs can hold back low-priority ones; keep high
 priorities for short, occasional work.
 
+## Lanes
+
+Each job runs in a lane: `"standard"` (default) or `"backlog"`.
+
+- **Standard** jobs run in priority order, as above.
+- **Backlog** jobs are for low-urgency work nobody is waiting on
+  (keeping derived results up to date, for example). One runs only when no
+  standard job is runnable, whatever its priority, so it never delays a
+  standard job that is already queued. Among backlog jobs, priority and FIFO
+  order apply as usual.
+- **Runtime cap.** A running job is never preempted, so a standard job
+  submitted while a backlog job runs waits for it. To bound that wait,
+  every backlog job is cut off after `max_runtime_s` (default and maximum
+  `LLOCKET_BACKLOG_MAX_RUNTIME_S`, 600s). A cut-off job fails with
+  `exceeded max runtime: ...` and isn't retried. Keep backlog jobs well
+  under the cap. A standard job may set `max_runtime_s` too; it has no
+  limit by default.
+- **`dedupe_key`.** When a job is submitted with a `dedupe_key`, any
+  queued job of the same project with the same key is cancelled
+  (`superseded by <new id>`) and the new one takes its place. Running and
+  finished jobs are left alone, and so is a queued job something else
+  depends on. A client can resubmit the same piece of work whenever its
+  inputs change without piling up stale copies. Works in either lane.
+
+`GET /jobs?lane=backlog` lists one lane. `job.json` records `lane`,
+`max_runtime_s` (the effective limit, or null) and `dedupe_key`.
+
 ## Client
 
 `llocketclient.py` -- stdlib-only client + CLI (`submit`, `job`, `jobs`,

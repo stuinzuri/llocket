@@ -71,14 +71,24 @@ class Llocket:
     def submit(self, project: str, messages: list, *, model: Optional[str] = None,
                purpose: Optional[str] = None, think: bool = False,
                sampling_options: Optional[dict] = None, depends_on: Optional[List[str]] = None,
-               max_attempts: int = 3, priority: int = 0) -> str:
+               max_attempts: int = 3, priority: int = 0, lane: str = "standard",
+               max_runtime_s: Optional[float] = None, dedupe_key: Optional[str] = None) -> str:
         """priority: higher runs before lower among queued jobs (default 0);
-        it never interrupts a running job."""
+        it never interrupts a running job. lane="backlog": runs only when no
+        standard job is runnable, cut off after max_runtime_s (capped by the
+        server). dedupe_key: replaces this project's queued job with the same
+        key (see README "Lanes")."""
         body = {"project": project, "messages": messages, "purpose": purpose, "think": think,
                 "sampling_options": sampling_options or {}, "depends_on": depends_on or [],
                 "max_attempts": max_attempts}
         if priority:
             body["priority"] = priority
+        if lane != "standard":
+            body["lane"] = lane
+        if max_runtime_s:
+            body["max_runtime_s"] = max_runtime_s
+        if dedupe_key:
+            body["dedupe_key"] = dedupe_key
         if model:
             body["model"] = model
         return self._request("POST", "/jobs", body)["id"]
@@ -86,8 +96,9 @@ class Llocket:
     def job(self, job_id: str) -> dict:
         return self._request("GET", f"/jobs/{job_id}")
 
-    def jobs(self, project: Optional[str] = None, status: Optional[str] = None) -> list:
-        return self._request("GET", "/jobs", params={"project": project, "status": status})
+    def jobs(self, project: Optional[str] = None, status: Optional[str] = None,
+             lane: Optional[str] = None) -> list:
+        return self._request("GET", "/jobs", params={"project": project, "status": status, "lane": lane})
 
     def cancel(self, job_id: str) -> dict:
         return self._request("DELETE", f"/jobs/{job_id}")
@@ -122,7 +133,7 @@ class Llocket:
 
 
 def _summary(job: dict) -> str:
-    extra = ""
+    extra = " lane=backlog" if job.get("lane") == "backlog" else ""
     if job.get("waiting_on"):
         extra = f" waiting_on={','.join(job['waiting_on'])}"
     if job.get("error"):
@@ -139,13 +150,14 @@ def main(argv=None) -> int:
     s = sub.add_parser("list")
     s.add_argument("--project")
     s.add_argument("--status", choices=["queued", "running", "done", "failed"])
+    s.add_argument("--lane", choices=["standard", "backlog"])
     for name in ("status", "wait", "cancel", "purge"):
         sub.add_parser(name).add_argument("job_id")
     args = ap.parse_args(argv)
     q = Llocket(args.api)
     try:
         if args.cmd == "list":
-            for j in q.jobs(args.project, args.status):
+            for j in q.jobs(args.project, args.status, args.lane):
                 print(_summary(j))
         elif args.cmd == "status":
             print(_summary(q.job(args.job_id)))

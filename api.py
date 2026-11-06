@@ -9,7 +9,7 @@ through the filesystem, exactly like everything else in this design.
     POST   /jobs        enqueue a job, returns its id (optional depends_on +
                         {{output:<id>}} placeholders, see lib.PLACEHOLDER)
     GET    /jobs/{id}   status + result (searches all four state dirs)
-    GET    /jobs         list jobs, optional ?project=&status= filters
+    GET    /jobs         list jobs, optional ?project=&status=&lane= filters
     DELETE /jobs/{id}   cancel -- only possible while still queued
     POST   /jobs/{id}/purge  drop a finished job's content (prompt, output,
                         thinking), keeping its metadata -- for clients that
@@ -29,8 +29,8 @@ from typing import List, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from lib import (OLLAMA_HOST, QUEUE_ROOT, STATES, atomic_write_json, dependents_pending, ensure_queue_dirs,
-                 input_chars, job_state, now_iso, placeholders_in, purge_content, read_json)
+from lib import (LANES, OLLAMA_HOST, QUEUE_ROOT, STATES, atomic_write_json, dependents_pending, effective_max_runtime,
+                 ensure_queue_dirs, input_chars, job_state, now_iso, placeholders_in, purge_content, read_json)
 
 DEFAULT_MODEL = "orcarouter/Qwen3.8-27B-Uncensored:q8_0"
 
@@ -48,6 +48,9 @@ class JobRequest(BaseModel):
     max_attempts: int = 3
     depends_on: List[str] = []
     priority: int = 0          # higher runs first among runnable jobs; see README "Priority"
+    lane: str = "standard"     # "standard" or "backlog"; see README "Lanes"
+    max_runtime_s: Optional[float] = None   # cut the call off after this long (backlog: always, capped)
+    dedupe_key: Optional[str] = None        # replaces this project's queued job with the same key
 
 
 def new_job_id() -> str:
@@ -70,8 +73,38 @@ def _startup():
     ensure_queue_dirs()
 
 
+def _supersede(project: str, dedupe_key: str, new_id: str) -> list:
+    """Cancel this project's queued jobs with the same dedupe_key (the new
+    job replaces them). Running and finished jobs are left alone. Returns
+    the ids cancelled."""
+    queued_root = os.path.join(QUEUE_ROOT, "queued")
+    gone = []
+    for job_id in sorted(os.listdir(queued_root)):
+        path = os.path.join(queued_root, job_id)
+        try:
+            job = read_json(path, "job.json")
+        except (FileNotFoundError, ValueError):
+            continue
+        if job.get("project") != project or job.get("dedupe_key") != dedupe_key:
+            continue
+        if dependents_pending(job_id):
+            continue   # something queued is waiting on its output
+        job.update(status="failed", error=f"superseded by {new_id}", updated_at=now_iso())
+        try:
+            atomic_write_json(path, "job.json", job)
+            os.rename(path, os.path.join(QUEUE_ROOT, "failed", job_id))
+            gone.append(job_id)
+        except (FileNotFoundError, OSError):
+            continue   # claimed by the worker meanwhile: it runs, the new job runs too
+    return gone
+
+
 @app.post("/jobs")
 def create_job(req: JobRequest):
+    if req.lane not in LANES:
+        raise HTTPException(status_code=422, detail=f"lane must be one of {list(LANES)}")
+    if req.max_runtime_s is not None and req.max_runtime_s <= 0:
+        raise HTTPException(status_code=422, detail="max_runtime_s must be positive")
     deps = list(dict.fromkeys(req.depends_on))
     refs = placeholders_in(req.messages)
     undeclared = sorted(refs - set(deps))
@@ -98,6 +131,9 @@ def create_job(req: JobRequest):
         "error": None,
         "depends_on": deps,
         "priority": req.priority,
+        "lane": req.lane,
+        "max_runtime_s": effective_max_runtime(req.lane, req.max_runtime_s),
+        "dedupe_key": req.dedupe_key,
         # prompt size, for clients estimating run time (see README "Job timing")
         "input_chars": input_chars(req.messages),
         "input_placeholders": len(refs),
@@ -114,9 +150,10 @@ def create_job(req: JobRequest):
     atomic_write_json(incoming_dir, "input.json", input_doc)
 
     queued_dir = os.path.join(QUEUE_ROOT, "queued", job_id)
+    superseded = _supersede(req.project, req.dedupe_key, job_id) if req.dedupe_key else []
     os.rename(incoming_dir, queued_dir)  # atomic publish
 
-    return {"id": job_id, "status": "queued"}
+    return {"id": job_id, "status": "queued", **({"superseded": superseded} if superseded else {})}
 
 
 @app.get("/jobs/{job_id}")
@@ -140,7 +177,7 @@ def get_job(job_id: str):
 
 
 @app.get("/jobs")
-def list_jobs(project: Optional[str] = None, status: Optional[str] = None):
+def list_jobs(project: Optional[str] = None, status: Optional[str] = None, lane: Optional[str] = None):
     states_to_scan = (status,) if status else STATES
     jobs = []
     for state in states_to_scan:
@@ -153,6 +190,8 @@ def list_jobs(project: Optional[str] = None, status: Optional[str] = None):
             except (FileNotFoundError, ValueError):
                 continue  # mid-write or genuinely corrupt -- skip, don't crash a list call
             if project and job.get("project") != project:
+                continue
+            if lane and (job.get("lane") or "standard") != lane:
                 continue
             job["status"] = state  # directory location is authoritative, see get_job()
             if state == "queued" and job.get("depends_on"):

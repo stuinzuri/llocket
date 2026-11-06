@@ -10,9 +10,9 @@ scan below is for. Normal shutdown and a crash are handled by the same
 path on purpose, rather than adding a separate graceful-shutdown branch
 that would only ever be exercised on purpose, not by an actual failure.
 
-Single sequential worker, FIFO by job id (timestamp-prefixed, so lexical
-sort is chronological) -- no message broker, one worker loop is the
-whole queue.
+Single sequential worker: standard lane before backlog, then priority,
+then FIFO by job id (timestamp-prefixed, so lexical sort is chronological)
+-- no message broker, one worker loop is the whole queue.
 
 Run under the account that owns the queue and Ollama instance:
     python3 ~/llocket/worker.py
@@ -29,8 +29,10 @@ from lib import (
     OLLAMA_HOST,
     QUEUE_ROOT,
     RETENTION_DAYS,
+    RuntimeLimitExceeded,
     atomic_write_json,
     call_ollama,
+    effective_max_runtime,
     ensure_queue_dirs,
     job_state,
     now_iso,
@@ -122,16 +124,19 @@ def _fail_unrunnable(job_dir: str, job: dict, reason: str) -> None:
 
 
 def _queue_order(queued_root: str) -> list:
-    """Queued job ids, highest priority first, then FIFO by job id (ids
-    start with their UTC timestamp). A job without a priority counts as 0."""
+    """Queued job ids: standard lane before backlog, then highest priority
+    first, then FIFO by job id (ids start with their UTC timestamp). A job
+    without a lane is standard; without a priority, 0."""
     keyed = []
     for job_id in os.listdir(queued_root):
         try:
-            prio = int(read_json(os.path.join(queued_root, job_id), "job.json").get("priority") or 0)
+            job = read_json(os.path.join(queued_root, job_id), "job.json")
+            prio = int(job.get("priority") or 0)
+            backlog = job.get("lane") == "backlog"
         except (FileNotFoundError, ValueError, TypeError):
-            prio = 0
-        keyed.append((-prio, job_id))
-    return [job_id for _p, job_id in sorted(keyed)]
+            prio, backlog = 0, False
+        keyed.append((backlog, -prio, job_id))
+    return [job_id for _b, _p, job_id in sorted(keyed)]
 
 
 def claim_next_job() -> str | None:
@@ -209,6 +214,7 @@ def process_job(job_dir: str) -> None:
         _fail_unrunnable(job_dir, job, f"could not resolve dependencies: {e}")
         return
     start = time.time()
+    max_runtime = effective_max_runtime(job.get("lane") or "standard", job.get("max_runtime_s"))
     try:
         result = call_ollama(
             job["host"],
@@ -216,7 +222,12 @@ def process_job(job_dir: str) -> None:
             messages,
             think=input_doc.get("think", False),
             options=input_doc.get("sampling_options"),
+            **({"max_runtime": max_runtime} if max_runtime else {}),
         )
+    except RuntimeLimitExceeded as e:
+        # not retried: another attempt would take just as long
+        _fail_unrunnable(job_dir, job, f"exceeded max runtime: {e}")
+        return
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         _requeue_or_fail(job_dir, job, f"ollama call failed: {e}")
         return
