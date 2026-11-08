@@ -97,8 +97,10 @@ class Llocket:
         return self._request("GET", f"/jobs/{job_id}")
 
     def jobs(self, project: Optional[str] = None, status: Optional[str] = None,
-             lane: Optional[str] = None) -> list:
-        return self._request("GET", "/jobs", params={"project": project, "status": status, "lane": lane})
+             lane: Optional[str] = None, since: Optional[str] = None) -> list:
+        """List jobs; since (ISO time) keeps only jobs created then or later."""
+        return self._request("GET", "/jobs", params={"project": project, "status": status, "lane": lane,
+                                                     "since": since})
 
     def cancel(self, job_id: str) -> dict:
         return self._request("DELETE", f"/jobs/{job_id}")

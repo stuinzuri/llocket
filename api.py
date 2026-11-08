@@ -9,7 +9,8 @@ through the filesystem, exactly like everything else in this design.
     POST   /jobs        enqueue a job, returns its id (optional depends_on +
                         {{output:<id>}} placeholders, see lib.PLACEHOLDER)
     GET    /jobs/{id}   status + result (searches all four state dirs)
-    GET    /jobs         list jobs, optional ?project=&status=&lane= filters
+    GET    /jobs         list jobs, optional ?project=&status=&lane=&since= filters
+                        (since: ISO time; only jobs created then or later)
     DELETE /jobs/{id}   cancel -- only possible while still queued
     POST   /jobs/{id}/purge  drop a finished job's content (prompt, output,
                         thinking), keeping its metadata -- for clients that
@@ -18,6 +19,11 @@ through the filesystem, exactly like everything else in this design.
 
 Run under the account that owns the queue and Ollama instance:
     python3 -m uvicorn api:app --host 0.0.0.0 --port 8000
+
+Timing: a request that takes LLOCKET_TIMING_LOG_S seconds or longer (default
+0.5; 0 logs every request) is logged as "[timing] METHOD path status secs",
+and a slow GET /jobs also logs where the time went (listing each state
+directory vs reading job files).
 """
 
 import os
@@ -26,7 +32,7 @@ import string
 import time
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from lib import (LANES, OLLAMA_HOST, QUEUE_ROOT, STATES, atomic_write_json, dependents_pending, effective_max_runtime,
@@ -35,6 +41,28 @@ from lib import (LANES, OLLAMA_HOST, QUEUE_ROOT, STATES, atomic_write_json, depe
 DEFAULT_MODEL = "orcarouter/Qwen3.8-27B-Uncensored:q8_0"
 
 app = FastAPI(title="Llocket")
+TIMING_LOG_S = float(os.environ.get("LLOCKET_TIMING_LOG_S", "0.5"))
+
+
+@app.middleware("http")
+async def _log_timing(request: Request, call_next):
+    started = time.monotonic()
+    response = await call_next(request)
+    secs = time.monotonic() - started
+    if secs >= TIMING_LOG_S:
+        query = f"?{request.url.query}" if request.url.query else ""
+        print(f"[timing] {request.method} {request.url.path}{query} {response.status_code} {secs:.3f}s", flush=True)
+    return response
+
+
+def _id_floor(since: str) -> str:
+    """ISO time -> the job-id prefix for jobs created then or later (job ids
+    start with their creation time, see new_job_id)."""
+    try:
+        t = time.strptime(since.strip().replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        raise HTTPException(status_code=422, detail="since must be an ISO time like 2026-01-31T12:00:00Z")
+    return time.strftime("%Y%m%dT%H%M%SZ", t)
 
 
 class JobRequest(BaseModel):
@@ -177,14 +205,25 @@ def get_job(job_id: str):
 
 
 @app.get("/jobs")
-def list_jobs(project: Optional[str] = None, status: Optional[str] = None, lane: Optional[str] = None):
+def list_jobs(project: Optional[str] = None, status: Optional[str] = None, lane: Optional[str] = None,
+              since: Optional[str] = None):
+    floor = _id_floor(since) if since else None
     states_to_scan = (status,) if status else STATES
     jobs = []
+    started = time.monotonic()
+    timing = []   # (state, entries listed, files read, listing secs, reading secs)
     for state in states_to_scan:
         state_dir = os.path.join(QUEUE_ROOT, state)
+        t0 = time.monotonic()
         if not os.path.isdir(state_dir):
             continue
-        for job_id in sorted(os.listdir(state_dir)):
+        names = sorted(os.listdir(state_dir))
+        t1 = time.monotonic()
+        read = 0
+        for job_id in names:
+            if floor and job_id[:len(floor)] < floor:
+                continue   # created before `since`: skip without reading it
+            read += 1
             try:
                 job = read_json(os.path.join(state_dir, job_id), "job.json")
             except (FileNotFoundError, ValueError):
@@ -197,6 +236,10 @@ def list_jobs(project: Optional[str] = None, status: Optional[str] = None, lane:
             if state == "queued" and job.get("depends_on"):
                 job["waiting_on"] = waiting_on(job)
             jobs.append(job)
+        timing.append((state, len(names), read, t1 - t0, time.monotonic() - t1))
+    if time.monotonic() - started >= TIMING_LOG_S:
+        parts = ", ".join(f"{st} {n} listed/{r} read {ls:.3f}s+{rd:.3f}s" for st, n, r, ls, rd in timing)
+        print(f"[timing] list_jobs {time.monotonic() - started:.3f}s: {parts}", flush=True)
     return jobs
 
 

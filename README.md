@@ -58,7 +58,7 @@ fileset is split across two states.
 **Code:** `lib.py` (shared primitives), `worker.py` (claims the oldest
 queued job, runs it, handles the orphan-recovery scan at startup),
 `api.py` (FastAPI: `POST /jobs`, `GET /jobs/{id}`, `GET
-/jobs?project=&status=`, `DELETE /jobs/{id}` -- cancel only works
+/jobs?project=&status=&lane=&since=`, `DELETE /jobs/{id}` -- cancel only works
 pre-claim, race-checked). `submit_job.py` is manual test scaffolding
 for exercising the worker without the API -- not a real integration
 point. `smoke_test.py` runs the full lifecycle (create -> publish ->

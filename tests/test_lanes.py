@@ -151,3 +151,18 @@ def test_call_ollama_stops_streaming_past_max_runtime(q, monkeypatch):
     clock["t"] = 0.0
     out = lib.call_ollama("http://h", "m", [])                # no limit: reads the whole stream
     assert out["message"]["content"] == "x" * 100
+
+
+def test_list_jobs_since_skips_older_jobs_without_reading_them(q):
+    api = _api(q)
+    lib, _ = q
+    import os, json
+    old = "20200101T000000Z-aaaaaaaa"
+    os.makedirs(os.path.join(lib.QUEUE_ROOT, "done", old))
+    with open(os.path.join(lib.QUEUE_ROOT, "done", old, "job.json"), "w") as f:
+        json.dump({"id": old, "project": "p"}, f)
+    new = api.create_job(api.JobRequest(project="p", messages=[]))["id"]
+    assert {j["id"] for j in api.list_jobs()} == {old, new}
+    assert [j["id"] for j in api.list_jobs(since="2021-01-01T00:00:00Z")] == [new]
+    with pytest.raises(api.HTTPException):
+        api.list_jobs(since="yesterday")
