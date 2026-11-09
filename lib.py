@@ -34,10 +34,12 @@ PLACEHOLDER = re.compile(r"\{\{output:([0-9A-Za-z_-]+)\}\}")
 STATES = ("queued", "running", "done", "failed")
 
 # Lanes (see README "Lanes"): "standard" jobs run in priority order; a
-# "backlog" job runs only when no standard job is runnable, and is capped at
-# BACKLOG_MAX_RUNTIME_S so the work it holds up waits at most that long.
+# "backlog" job runs only when no standard job is runnable, and is cut off
+# after BACKLOG_DEFAULT_RUNTIME_S (or what it asked for, up to
+# BACKLOG_MAX_RUNTIME_S) so the work it holds up waits at most that long.
 LANES = ("standard", "backlog")
-BACKLOG_MAX_RUNTIME_S = float(os.environ.get("LLOCKET_BACKLOG_MAX_RUNTIME_S", "600"))
+BACKLOG_DEFAULT_RUNTIME_S = float(os.environ.get("LLOCKET_BACKLOG_DEFAULT_RUNTIME_S", "600"))
+BACKLOG_MAX_RUNTIME_S = float(os.environ.get("LLOCKET_BACKLOG_MAX_RUNTIME_S", "1800"))
 
 
 class RuntimeLimitExceeded(Exception):
@@ -46,9 +48,10 @@ class RuntimeLimitExceeded(Exception):
 
 def effective_max_runtime(lane: str, requested=None):
     """Seconds a job may run, or None for no limit. Backlog jobs always have
-    one, at most BACKLOG_MAX_RUNTIME_S; a standard job only if it asked."""
+    one: what it asked for, at most BACKLOG_MAX_RUNTIME_S, else
+    BACKLOG_DEFAULT_RUNTIME_S. A standard job has one only if it asked."""
     if lane == "backlog":
-        return min(float(requested), BACKLOG_MAX_RUNTIME_S) if requested else BACKLOG_MAX_RUNTIME_S
+        return min(float(requested), BACKLOG_MAX_RUNTIME_S) if requested else BACKLOG_DEFAULT_RUNTIME_S
     return float(requested) if requested else None
 
 

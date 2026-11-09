@@ -48,8 +48,9 @@ def test_backlog_runs_while_standard_waits_on_a_dependency(q):
 def test_effective_max_runtime(q):
     lib, _ = q
     cap = lib.BACKLOG_MAX_RUNTIME_S
-    assert lib.effective_max_runtime("backlog") == cap
+    assert lib.effective_max_runtime("backlog") == lib.BACKLOG_DEFAULT_RUNTIME_S < cap
     assert lib.effective_max_runtime("backlog", 120) == 120
+    assert lib.effective_max_runtime("backlog", cap) == cap
     assert lib.effective_max_runtime("backlog", cap * 10) == cap
     assert lib.effective_max_runtime("standard") is None
     assert lib.effective_max_runtime("standard", 90) == 90
@@ -99,7 +100,7 @@ def test_api_lane_validation_and_recorded_fields(q):
     assert e.value.status_code == 422
     ok = api.create_job(api.JobRequest(project="p", messages=[], lane="backlog"))
     job = api.get_job(ok["id"])
-    assert job["lane"] == "backlog" and job["max_runtime_s"] == lib.BACKLOG_MAX_RUNTIME_S
+    assert job["lane"] == "backlog" and job["max_runtime_s"] == lib.BACKLOG_DEFAULT_RUNTIME_S
     std = api.get_job(api.create_job(api.JobRequest(project="p", messages=[]))["id"])
     assert std["lane"] == "standard" and std["max_runtime_s"] is None
     assert [j["id"] for j in api.list_jobs(lane="backlog")] == [ok["id"]]

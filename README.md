@@ -130,8 +130,9 @@ Each job runs in a lane: `"standard"` (default) or `"backlog"`.
   order apply as usual.
 - **Runtime cap.** A running job is never preempted, so a standard job
   submitted while a backlog job runs waits for it. To bound that wait,
-  every backlog job is cut off after `max_runtime_s` (default and maximum
-  `LLOCKET_BACKLOG_MAX_RUNTIME_S`, 600s). A cut-off job fails with
+  every backlog job is cut off after `max_runtime_s`: by default
+  `LLOCKET_BACKLOG_DEFAULT_RUNTIME_S` (600s); a job may ask for longer, up to
+  `LLOCKET_BACKLOG_MAX_RUNTIME_S` (1800s). A cut-off job fails with
   `exceeded max runtime: ...` and isn't retried. Keep backlog jobs well
   under the cap. A standard job may set `max_runtime_s` too; it has no
   limit by default.
