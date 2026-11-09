@@ -143,6 +143,23 @@ Each job runs in a lane: `"standard"` (default) or `"backlog"`.
   depends on. A client can resubmit the same piece of work whenever its
   inputs change without piling up stale copies. Works in either lane.
 
+### Duplicates
+
+Every job records a `fingerprint`: a SHA-256 over its full request (the
+messages, `think`, `sampling_options`, and every setting the caller chose:
+project, purpose, model, host, priority, lane, `max_runtime_s`, `dedupe_key`,
+`depends_on`, `max_attempts`). Two jobs with the same fingerprint would make
+the same call.
+
+Submit with `join_identical: true` and, if a queued or running job of the
+same project has the same fingerprint, no copy is queued: the response is
+that job's id with `"joined": true`, and every submitter waits on the one
+run. Cancelling a joined job only drops one submitter's claim on it; it's
+cancelled when the last one does. Leave `join_identical` off when repeats
+are the point (sampling the same prompt several times). `GET /jobs` shows
+each queued and running job's fingerprint, so duplicates can be spotted.
+Two identical submissions in the same instant can still both be queued.
+
 `GET /jobs?lane=backlog` lists one lane. `job.json` records `lane`,
 `max_runtime_s` (the effective limit, or null) and `dedupe_key`.
 

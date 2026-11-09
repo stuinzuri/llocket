@@ -172,6 +172,51 @@ def _stream_chat(req, timeout: float, started: float, max_runtime) -> dict:
     }
 
 
+# Fields of job.json and input.json that make two jobs "identical": everything
+# the caller asked for. Ids, times, status and counters are left out.
+FINGERPRINT_JOB_FIELDS = ("project", "purpose", "model", "host", "priority", "lane", "max_runtime_s",
+                          "dedupe_key", "depends_on", "max_attempts")
+FINGERPRINT_INPUT_FIELDS = ("messages", "think", "sampling_options")
+
+
+def fingerprint(job: dict, input_doc: dict) -> str:
+    """SHA-256 over a job's full request: its input and every setting the
+    caller chose. Two jobs with the same fingerprint would make the same call."""
+    import hashlib
+    doc = {**{k: job.get(k) for k in FINGERPRINT_JOB_FIELDS},
+           **{k: input_doc.get(k) for k in FINGERPRINT_INPUT_FIELDS}}
+    return hashlib.sha256(json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def job_fingerprint(job_dir: str) -> str:
+    """A stored job's fingerprint: from job.json, or computed for a job
+    queued before fingerprints were recorded. "" if its files can't be read."""
+    try:
+        job = read_json(job_dir, "job.json")
+        return job.get("fingerprint") or fingerprint(job, read_json(job_dir, "input.json"))
+    except (FileNotFoundError, ValueError):
+        return ""
+
+
+def find_identical(project: str, fp: str):
+    """(state, job id) of a queued or running job of this project with this
+    fingerprint, oldest first, or (None, None)."""
+    for state in ("running", "queued"):
+        root = os.path.join(QUEUE_ROOT, state)
+        if not os.path.isdir(root):
+            continue
+        for job_id in sorted(os.listdir(root)):
+            path = os.path.join(root, job_id)
+            try:
+                if read_json(path, "job.json").get("project") != project:
+                    continue
+            except (FileNotFoundError, ValueError):
+                continue
+            if job_fingerprint(path) == fp:
+                return state, job_id
+    return None, None
+
+
 def job_state(job_id: str):
     """(state, path) of a job by id, or (None, None) if it doesn't exist."""
     for state in STATES:

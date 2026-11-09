@@ -72,12 +72,15 @@ class Llocket:
                purpose: Optional[str] = None, think: bool = False,
                sampling_options: Optional[dict] = None, depends_on: Optional[List[str]] = None,
                max_attempts: int = 3, priority: int = 0, lane: str = "standard",
-               max_runtime_s: Optional[float] = None, dedupe_key: Optional[str] = None) -> str:
+               max_runtime_s: Optional[float] = None, dedupe_key: Optional[str] = None,
+               join_identical: bool = False) -> str:
         """priority: higher runs before lower among queued jobs (default 0);
         it never interrupts a running job. lane="backlog": runs only when no
         standard job is runnable, cut off after max_runtime_s (capped by the
         server). dedupe_key: replaces this project's queued job with the same
-        key (see README "Lanes")."""
+        key (see README "Lanes"). join_identical: if an identical job (same
+        input and settings) is already queued or running for the project,
+        return its id instead of queuing a copy (see README "Duplicates")."""
         body = {"project": project, "messages": messages, "purpose": purpose, "think": think,
                 "sampling_options": sampling_options or {}, "depends_on": depends_on or [],
                 "max_attempts": max_attempts}
@@ -91,6 +94,8 @@ class Llocket:
             body["dedupe_key"] = dedupe_key
         if model:
             body["model"] = model
+        if join_identical:
+            body["join_identical"] = True
         return self._request("POST", "/jobs", body)["id"]
 
     def job(self, job_id: str) -> dict:

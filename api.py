@@ -7,7 +7,10 @@ idea whether a worker is even alive. The two processes are decoupled
 through the filesystem, exactly like everything else in this design.
 
     POST   /jobs        enqueue a job, returns its id (optional depends_on +
-                        {{output:<id>}} placeholders, see lib.PLACEHOLDER)
+                        {{output:<id>}} placeholders, see lib.PLACEHOLDER).
+                        join_identical: if a queued or running job of the
+                        project has the same fingerprint (identical input and
+                        settings), returns that job's id instead of a copy
     GET    /jobs/{id}   status + result (searches all four state dirs)
     GET    /jobs         list jobs, optional ?project=&status=&lane=&since= filters
                         (since: ISO time; only jobs created then or later)
@@ -36,7 +39,8 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from lib import (LANES, OLLAMA_HOST, QUEUE_ROOT, STATES, atomic_write_json, dependents_pending, effective_max_runtime,
-                 ensure_queue_dirs, input_chars, job_state, now_iso, placeholders_in, purge_content, read_json)
+                 ensure_queue_dirs, find_identical, fingerprint, input_chars, job_fingerprint, job_state, now_iso,
+                 placeholders_in, purge_content, read_json)
 
 DEFAULT_MODEL = "orcarouter/Qwen3.8-27B-Uncensored:q8_0"
 
@@ -79,6 +83,21 @@ class JobRequest(BaseModel):
     lane: str = "standard"     # "standard" or "backlog"; see README "Lanes"
     max_runtime_s: Optional[float] = None   # cut the call off after this long (backlog: always, capped)
     dedupe_key: Optional[str] = None        # replaces this project's queued job with the same key
+    join_identical: bool = False            # reuse an identical queued/running job; see README "Duplicates"
+
+
+def _add_joiner(state: str, job_id: str) -> bool:
+    """Count one more submitter waiting on this job, so one of them
+    cancelling doesn't cancel it for the rest. False if it moved on."""
+    path = os.path.join(QUEUE_ROOT, state, job_id)
+    try:
+        job = read_json(path, "job.json")
+        if state == "queued":
+            job["joined"] = (job.get("joined") or 0) + 1
+            atomic_write_json(path, "job.json", job)
+        return True
+    except (FileNotFoundError, ValueError, OSError):
+        return False
 
 
 def new_job_id() -> str:
@@ -171,6 +190,11 @@ def create_job(req: JobRequest):
         "think": req.think,
         "sampling_options": req.sampling_options or {},
     }
+    job["fingerprint"] = fingerprint(job, input_doc)
+    if req.join_identical:
+        state, same = find_identical(req.project, job["fingerprint"])
+        if same and _add_joiner(state, same):
+            return {"id": same, "status": state, "joined": True}
 
     incoming_dir = os.path.join(QUEUE_ROOT, ".incoming", job_id)
     os.makedirs(incoming_dir)
@@ -233,6 +257,8 @@ def list_jobs(project: Optional[str] = None, status: Optional[str] = None, lane:
             if lane and (job.get("lane") or "standard") != lane:
                 continue
             job["status"] = state  # directory location is authoritative, see get_job()
+            if state in ("queued", "running") and not job.get("fingerprint"):
+                job["fingerprint"] = job_fingerprint(os.path.join(state_dir, job_id))   # queued before fingerprints
             if state == "queued" and job.get("depends_on"):
                 job["waiting_on"] = waiting_on(job)
             jobs.append(job)
@@ -255,6 +281,12 @@ def cancel_job(job_id: str):
         )
 
     job = read_json(path, "job.json")
+    if job.get("joined"):
+        # another submitter joined this job: drop one claim on it, keep it queued
+        job["joined"] -= 1
+        job["updated_at"] = now_iso()
+        atomic_write_json(path, "job.json", job)
+        return {"id": job_id, "status": "queued", "note": "still wanted by another submitter"}
     job["status"] = "failed"
     job["error"] = "cancelled"
     job["updated_at"] = now_iso()
