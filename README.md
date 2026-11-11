@@ -126,7 +126,6 @@ once its oldest job has waited `LLOCKET_AFFINITY_MAX_WAIT_S` (default 600s),
 and it falls back to plain FIFO. Set it to 0 to turn affinity off. It never
 crosses priorities or lanes.
 
-
 ## Lanes
 
 Each job runs in a lane: `"standard"` (default) or `"backlog"`.
@@ -188,6 +187,36 @@ when it was submitted; `updated_at` when it last changed state).
 not counted) and `input_placeholders` how many `{{output:<id>}}`
 placeholders it has, so a client can estimate how long a job will take
 before it starts. Jobs submitted before these fields existed lack them.
+
+## Levels of model management
+
+Running local models tends to move through three levels as the demands
+grow. Each solves the previous level's limit and brings new duties.
+
+1. **One model, one configuration.** Ollama with its defaults: pull a
+   model, send chats. Ollama owns loading, the prompt template and the
+   sampler defaults. Enough until speed or variety matter.
+2. **Several models and per-job settings, still through Ollama.** Different
+   models or quantizations per task, and per-job `sampling_options`
+   (`num_ctx`, temperature, ...). New duties: memory (what fits resident at
+   once), swap cost (a reload whenever the model or `num_ctx` changes), and
+   knowing each model's effective defaults (`ollama show --parameters`
+   plus Ollama's built-ins). Llocket helps with ordering (priority, lanes,
+   model affinity).
+3. **Engine-level control.** Run some models on llama.cpp's own server for
+   features Ollama doesn't expose: speculative decoding, engine flags,
+   template arguments (see the next section). New duties, because Ollama
+   no longer does them for you: send every sampler setting explicitly; make
+   the chat template match what Ollama renders, and prove it with a greedy
+   comparison; manage the process and its memory (one engine holds a model
+   at a time); pin the engine version and repeat the checks when you
+   upgrade it.
+
+Measure before moving up a level. A dense model's generation speed is
+capped by memory bandwidth divided by the model's size in bytes, so check
+how close you already are. The biggest gains so far came from techniques
+that beat that cap (speculative decoding) or shrink the bytes read
+(quantization, MoE models), not from switching runtimes.
 
 ## llama-server backend (optional)
 
