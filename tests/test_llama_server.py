@@ -153,11 +153,12 @@ def _route(q, ls, tmp_path, monkeypatch, cfg, model="my-model"):
 def test_worker_routes_listed_model_to_llama_server(q, ls, tmp_path, fake_ollama, monkeypatch):
     monkeypatch.setattr(q[0], "OLLAMA_HOST", fake_ollama["host"])
     monkeypatch.setenv("LLOCKET_OLLAMA_HOST", fake_ollama["host"])
-    worker, result, calls = _route(q, ls, tmp_path, monkeypatch, config(tmp_path, free_port()))
+    worker, result, calls = _route(q, ls, tmp_path, monkeypatch, config(tmp_path, free_port(), tags=["opt:x"]))
     try:
         assert not calls and result["backend"] == "llama-server"
         doc = worker.output_doc(result)
         assert doc["backend"] == "llama-server" and doc["draft_n_accepted"] == 4 and doc["eval_count"] == 7
+        assert result["engine_tags"] == ["opt:x"]
         # an unlisted model goes to Ollama, and the server is stopped first to free memory
         result = worker.run_model({"id": "j2", "host": worker.OLLAMA_HOST, "model": "other"}, MSGS, {}, None)
         assert result["backend"] == "ollama" and len(calls) == 1 and not worker.manager().running()

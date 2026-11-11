@@ -261,8 +261,25 @@ takes effect from the next job without a restart.
   file beside the backends file; a restarted worker stops one it left
   behind). If the server can't start, the job runs on Ollama instead.
 - **Output:** `output.json` gains `backend` (`ollama` or `llama-server`) and,
-  when speculative decoding ran, `draft_n` / `draft_n_accepted`.
+  when speculative decoding ran, `draft_n` / `draft_n_accepted`; its run
+  tags include `engine:llama-server` and the model's `tags` (see "Tags").
   `load_duration_ns` is 0 on llama-server (start-up time is logged instead).
+
+## Tags
+
+Tags label jobs so results can be grouped later, for example before and
+after an engine change or a hardware move.
+
+- **Job tags:** a job may carry `tags`, a list of free-form strings (at
+  most 32, up to 64 characters each), e.g. `["exp:new-prompt"]`. They are
+  kept in `job.json` and don't affect duplicate detection.
+- **Run tags:** when a job finishes, the worker adds how it actually ran:
+  `chip:<cpu>` (detected, e.g. `chip:apple-m4-pro`), any
+  `LLOCKET_HOST_TAGS` (comma-separated, set on the worker), `engine:ollama`
+  or `engine:llama-server`, and the model's `tags` from the backends file
+  (e.g. an optimization such as `opt:mtp-n2`).
+- `output.json` has `tags`: the job's tags followed by the run tags. Use a
+  `name:value` form so tags group and filter cleanly.
 
 ## Purging content
 

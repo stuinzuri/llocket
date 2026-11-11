@@ -72,6 +72,39 @@ def _requeue_or_fail(job_dir: str, job: dict, reason: str) -> None:
     os.rename(job_dir, dest)
 
 
+def _chip_tag() -> list:
+    """chip:<cpu brand>, e.g. chip:apple-m4-pro, or nothing if unknown."""
+    import platform
+    import re
+    import subprocess
+    brand = ""
+    try:
+        if sys.platform == "darwin":
+            brand = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True,
+                                   text=True, timeout=5).stdout
+        else:
+            with open("/proc/cpuinfo") as f:
+                brand = next((ln.split(":", 1)[1] for ln in f if ln.startswith("model name")), "")
+    except (OSError, subprocess.SubprocessError, StopIteration):
+        brand = platform.processor()
+    slug = re.sub(r"[^a-z0-9]+", "-", (brand or "").lower()).strip("-")
+    return [f"chip:{slug}"] if slug else []
+
+
+# Tags every job run on this host gets: the chip, plus LLOCKET_HOST_TAGS (comma-separated).
+HOST_TAGS = _chip_tag() + [t.strip() for t in os.environ.get("LLOCKET_HOST_TAGS", "").split(",") if t.strip()]
+
+
+def run_tags(job: dict, result: dict) -> list:
+    """The job's own tags, then how it ran: host tags, engine:<backend>, and
+    the backends file's tags for the model (e.g. an optimization)."""
+    tags = list(job.get("tags") or []) + HOST_TAGS
+    if result.get("backend"):
+        tags.append(f"engine:{result['backend']}")
+    tags += result.get("engine_tags") or []
+    return list(dict.fromkeys(tags))
+
+
 def output_doc(result: dict) -> dict:
     """What a finished job keeps from Ollama's /api/chat response: the
     message plus its counts and timings (nanoseconds, as Ollama reports
@@ -88,7 +121,7 @@ def output_doc(result: dict) -> dict:
         "prompt_eval_duration_ns": result.get("prompt_eval_duration"),
         "eval_duration_ns": result.get("eval_duration"),
         # which engine ran it, and speculative-decoding counts when it was used
-        **{k: result[k] for k in ("backend", "draft_n", "draft_n_accepted") if result.get(k) is not None},
+        **{k: result[k] for k in ("backend", "draft_n", "draft_n_accepted", "tags") if result.get(k) is not None},
     }
 
 
@@ -142,6 +175,7 @@ def run_model(job: dict, messages: list, input_doc: dict, max_runtime) -> dict:
             finally:
                 mgr.touch()
             result["backend"] = "llama-server"
+            result["engine_tags"] = list(mc.get("tags") or [])
             return result
     if mgr:
         mgr.stop()  # free its memory before Ollama loads a model
@@ -318,6 +352,7 @@ def process_job(job_dir: str) -> None:
         return
     elapsed = time.time() - start
     print(f"[{job_id}] responded in {elapsed:.1f}s, done_reason={result.get('done_reason')}")
+    result["tags"] = run_tags(job, result)
 
     atomic_write_json(job_dir, "output.json", output_doc(result))
 

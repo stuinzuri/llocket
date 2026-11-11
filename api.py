@@ -83,6 +83,7 @@ class JobRequest(BaseModel):
     max_runtime_s: Optional[float] = None   # cut the call off after this long (backlog: always, capped)
     dedupe_key: Optional[str] = None        # replaces this project's queued job with the same key
     join_identical: bool = False            # reuse an identical queued/running job; see README "Duplicates"
+    tags: List[str] = []                    # free-form labels, echoed in output.json; see README "Tags"
 
 
 def _add_joiner(state: str, job_id: str) -> bool:
@@ -97,6 +98,9 @@ def _add_joiner(state: str, job_id: str) -> bool:
         return True
     except (FileNotFoundError, ValueError, OSError):
         return False
+
+
+MAX_TAGS, MAX_TAG_LEN = 32, 64
 
 
 def new_job_id() -> str:
@@ -155,6 +159,9 @@ def create_job(req: JobRequest):
         raise HTTPException(status_code=422, detail=f"lane must be one of {list(LANES)}")
     if req.max_runtime_s is not None and req.max_runtime_s <= 0:
         raise HTTPException(status_code=422, detail="max_runtime_s must be positive")
+    tags = list(dict.fromkeys(t.strip() for t in req.tags if isinstance(t, str) and t.strip()))
+    if len(tags) > MAX_TAGS or any(len(t) > MAX_TAG_LEN for t in tags):
+        raise HTTPException(status_code=422, detail=f"at most {MAX_TAGS} tags of up to {MAX_TAG_LEN} characters")
     deps = list(dict.fromkeys(req.depends_on))
     refs = placeholders_in(req.messages)
     undeclared = sorted(refs - set(deps))
@@ -184,6 +191,7 @@ def create_job(req: JobRequest):
         "lane": req.lane,
         "max_runtime_s": effective_max_runtime(req.lane, req.max_runtime_s),
         "dedupe_key": req.dedupe_key,
+        "tags": tags,
         # prompt size, for clients estimating run time (see README "Job timing")
         "input_chars": input_chars(req.messages),
         "input_placeholders": len(refs),

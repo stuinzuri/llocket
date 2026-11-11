@@ -15,7 +15,8 @@ Off unless a backends file exists (LLOCKET_BACKENDS_FILE, default
                 "ctx": 65536,
                 "args": ["--spec-type", "draft-mtp"],
                 "defaults": {"temperature": 1.0, "top_k": 20, "top_p": 0.95},
-                "chat_template_kwargs": {"some_template_flag": false}
+                "chat_template_kwargs": {"some_template_flag": false},
+                "tags": ["opt:speculative"]
             }}}}
 
 A job for a listed model (on the default Ollama host, text only) runs on
