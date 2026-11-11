@@ -93,15 +93,27 @@ def output_doc(result: dict) -> dict:
 
 
 _manager = None
+_backends_mtime = -1.0
 
 
 def manager():
-    """The llama-server manager, or None when no backends file configures one."""
-    global _manager
-    if _manager is None:
-        cfg = llama_server.load_config()
-        _manager = llama_server.Manager(cfg, OLLAMA_HOST) if cfg.get("models") else False
-    return _manager or None
+    """The llama-server manager, or None when no backends file configures one.
+    The file is re-read when it changes (or disappears), so a model can be
+    moved between engines without restarting the worker."""
+    global _manager, _backends_mtime
+    try:
+        mtime = os.stat(llama_server.BACKENDS_FILE).st_mtime
+    except OSError:
+        mtime = 0.0
+    if mtime != _backends_mtime:
+        if _manager:
+            _manager.stop()
+        cfg = llama_server.load_config() if mtime else {}
+        _manager = llama_server.Manager(cfg, OLLAMA_HOST) if cfg.get("models") else None
+        _backends_mtime = mtime
+        if _manager:
+            print(f"llama-server backend for: {', '.join(sorted(cfg['models']))}")
+    return _manager
 
 
 def run_model(job: dict, messages: list, input_doc: dict, max_runtime) -> dict:

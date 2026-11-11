@@ -192,7 +192,9 @@ It is off unless a backends file exists on the host
 (`LLOCKET_BACKENDS_FILE`, default `~/llocket/backends.json`; never in this
 repo). See the docstring in `llama_server.py` for the format: the
 `llama-server` binary, a port, an idle timeout, and per Ollama model name the
-GGUF path, context size, extra server arguments and sampler defaults.
+GGUF path, context size, extra server arguments and sampler defaults. The
+worker re-reads the file when it changes, so adding, removing or deleting it
+takes effect from the next job without a restart.
 
 - **Routing:** a job runs on llama-server when its model is listed, its host
   is the default Ollama host, and it has no images. Everything else uses

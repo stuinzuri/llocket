@@ -178,3 +178,16 @@ def test_no_backends_file_means_ollama_only(q, ls, tmp_path, monkeypatch):
     assert worker.manager() is None
     result = worker.run_model({"id": "j", "host": worker.OLLAMA_HOST, "model": "my-model"}, MSGS, {}, None)
     assert result["backend"] == "ollama" and "backend" in worker.output_doc(result)
+
+
+def test_backends_file_changes_apply_without_restart(q, ls, tmp_path, monkeypatch):
+    import os
+    lib, worker = q
+    importlib.reload(worker)
+    f = tmp_path / "backends.json"
+    assert worker.manager() is None
+    f.write_text(json.dumps({"llama_server": config(tmp_path, free_port())}))
+    os.utime(f, (1, 1))
+    assert worker.manager().handles("my-model")
+    f.unlink()
+    assert worker.manager() is None
