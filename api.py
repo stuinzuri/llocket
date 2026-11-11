@@ -31,7 +31,6 @@ directory vs reading job files).
 
 import os
 import random
-import string
 import time
 from typing import List, Optional
 
@@ -101,9 +100,13 @@ def _add_joiner(state: str, job_id: str) -> bool:
 
 
 def new_job_id() -> str:
-    ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    suffix = "".join(random.choices(string.hexdigits.lower(), k=8))
-    return f"{ts}-{suffix}"
+    """<UTC second>-<8 hex>. The first 5 hex digits are the microsecond, so
+    ids sort in creation order even within one second (FIFO and "oldest
+    first" rely on that); the last 3 are random."""
+    now = time.time()
+    ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(now))
+    usec = int((now % 1) * 1_000_000)
+    return f"{ts}-{usec:05x}{random.randrange(16 ** 3):03x}"
 
 
 def find_job_dir(job_id: str):

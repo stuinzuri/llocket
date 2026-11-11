@@ -34,7 +34,7 @@ queue/
 ```
 
 **`job.json`** (small control record, cheap to read for status polls):
-`id` (timestamp-prefixed + random suffix, sorts chronologically),
+`id` (UTC second, then microsecond + random hex; sorts in creation order),
 `project` (caller's namespace, opaque to Llocket), `purpose` (caller's
 free-text tag, also opaque), `status`, `attempts`/`max_attempts`
 (capped-retry: an orphan found in `running/` at worker startup gets
