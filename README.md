@@ -249,7 +249,9 @@ takes effect from the next job without a restart.
   passed to the template to make them agree. Before listing a model, run the
   same chat greedily (temperature 0) on both engines, under a second name for
   llama-server so real jobs aren't affected: the prompt token counts and the
-  output should match.
+  output should match. `tools/engine_check.py` does this through the queue
+  (thinking on and off) and also reports speed and draft acceptance; add
+  `--long 20000` for long-context speed.
 - **Memory:** only one engine holds a model at a time. Starting llama-server
   first unloads everything Ollama has resident; an Ollama job stops
   llama-server first; an idle llama-server stops after `idle_stop_s`. Models
