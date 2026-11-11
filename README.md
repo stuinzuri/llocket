@@ -204,9 +204,14 @@ takes effect from the next job without a restart.
   `defaults`, which you copy from `ollama show --parameters`, then the job's
   `sampling_options`). `num_predict` becomes `max_tokens`, `num_ctx` sets the
   server's context (it restarts if a job needs more), and `think` becomes
-  `enable_thinking`. Options it can't map are logged and ignored. Prompts are
-  formatted by the GGUF's own chat template, not Ollama's renderer, so check
-  the two agree (a greedy, temperature-0 comparison) before listing a model.
+  `enable_thinking`. Options it can't map are logged and ignored.
+- **Prompt parity:** llama-server formats the chat with the GGUF's own
+  template; Ollama may use a built-in renderer that differs (a newer template
+  can add instructions by default). A model's `chat_template_kwargs` are
+  passed to the template to make them agree. Before listing a model, run the
+  same chat greedily (temperature 0) on both engines, under a second name for
+  llama-server so real jobs aren't affected: the prompt token counts and the
+  output should match.
 - **Memory:** only one engine holds a model at a time. Starting llama-server
   first unloads everything Ollama has resident; an Ollama job stops
   llama-server first; an idle llama-server stops after `idle_stop_s`. Models

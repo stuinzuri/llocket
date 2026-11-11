@@ -14,7 +14,8 @@ Off unless a backends file exists (LLOCKET_BACKENDS_FILE, default
                 "gguf": "/path/to/model.gguf",
                 "ctx": 65536,
                 "args": ["--spec-type", "draft-mtp"],
-                "defaults": {"temperature": 1.0, "top_k": 20, "top_p": 0.95}
+                "defaults": {"temperature": 1.0, "top_k": 20, "top_p": 0.95},
+                "chat_template_kwargs": {"some_template_flag": false}
             }}}}
 
 A job for a listed model (on the default Ollama host, text only) runs on
@@ -27,6 +28,13 @@ llama-server's own defaults never apply. The precedence is Ollama's
 built-in defaults, then the model's "defaults" (copy them from
 `ollama show --parameters`), then the job's sampling_options -- the same
 order Ollama uses.
+
+Prompt parity: llama-server formats the chat with the GGUF's own template,
+Ollama sometimes with a built-in renderer of its own, and the two can
+differ (e.g. a newer template adding instructions by default). A model's
+"chat_template_kwargs" are passed to the template to make them agree;
+`think` always sets enable_thinking. Check with a greedy (temperature 0)
+job on each engine: same prompt token count and the same output.
 
 Memory: one backend holds a model at a time. Starting llama-server first
 unloads every model Ollama has resident; an Ollama job first stops
@@ -71,7 +79,8 @@ def load_config(path: str = BACKENDS_FILE) -> dict:
         return {}
 
 
-def build_request(messages: list, think: bool, options: dict = None, defaults: dict = None) -> tuple:
+def build_request(messages: list, think: bool, options: dict = None, defaults: dict = None,
+                  template_kwargs: dict = None) -> tuple:
     """(body for /v1/chat/completions, option names that were ignored)."""
     options = dict(options or {})
     params = {**OLLAMA_DEFAULTS, **(defaults or {})}
@@ -82,7 +91,7 @@ def build_request(messages: list, think: bool, options: dict = None, defaults: d
         elif k not in RUNNER_OPTIONS:
             ignored.append(k)
     body = {"messages": messages, "stream": True, "cache_prompt": True,
-            "chat_template_kwargs": {"enable_thinking": bool(think)}, **params}
+            "chat_template_kwargs": {**(template_kwargs or {}), "enable_thinking": bool(think)}, **params}
     n = options.get("num_predict")
     if n is not None and int(n) > 0:
         body["max_tokens"] = int(n)

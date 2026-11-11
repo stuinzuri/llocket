@@ -132,8 +132,9 @@ def run_model(job: dict, messages: list, input_doc: dict, max_runtime) -> dict:
             print(f"[{job['id']}] llama-server unavailable ({e}); using ollama")
             mgr.stop()
         else:
-            body, ignored = llama_server.build_request(messages, think, options,
-                                                       mgr.model_config(job["model"]).get("defaults"))
+            mc = mgr.model_config(job["model"])
+            body, ignored = llama_server.build_request(messages, think, options, mc.get("defaults"),
+                                                       mc.get("chat_template_kwargs"))
             if ignored:
                 print(f"[{job['id']}] options not supported by llama-server, ignored: {', '.join(ignored)}")
             try:

@@ -80,6 +80,8 @@ def test_sampler_precedence_and_option_mapping(ls):
     assert "num_ctx" not in body and "num_predict" not in body
     assert body["chat_template_kwargs"] == {"enable_thinking": True}
     assert ignored == ["made_up"]
+    body, _ = ls.build_request(MSGS, True, {}, template_kwargs={"flag": "x", "enable_thinking": False})
+    assert body["chat_template_kwargs"] == {"flag": "x", "enable_thinking": True}   # think always wins
     body, _ = ls.build_request(MSGS, False, {"num_predict": -1})
     assert "max_tokens" not in body and body["chat_template_kwargs"] == {"enable_thinking": False}
 
