@@ -180,6 +180,43 @@ not counted) and `input_placeholders` how many `{{output:<id>}}`
 placeholders it has, so a client can estimate how long a job will take
 before it starts. Jobs submitted before these fields existed lack them.
 
+## llama-server backend (optional)
+
+Some engine features (e.g. speculative decoding with a model's built-in
+multi-token-prediction layer, `--spec-type draft-mtp`) are in llama.cpp's
+`llama-server` but not exposed by Ollama. `llama_server.py` lets the worker
+run chosen models there instead. Clients don't change: they submit the same
+Ollama-shaped job, and `output.json` has the same fields.
+
+It is off unless a backends file exists on the host
+(`LLOCKET_BACKENDS_FILE`, default `~/llocket/backends.json`; never in this
+repo). See the docstring in `llama_server.py` for the format: the
+`llama-server` binary, a port, an idle timeout, and per Ollama model name the
+GGUF path, context size, extra server arguments and sampler defaults.
+
+- **Routing:** a job runs on llama-server when its model is listed, its host
+  is the default Ollama host, and it has no images. Everything else uses
+  Ollama.
+- **Sampling parity:** every sampler setting is sent explicitly, in Ollama's
+  order of precedence (Ollama's built-in defaults, then the model's
+  `defaults`, which you copy from `ollama show --parameters`, then the job's
+  `sampling_options`). `num_predict` becomes `max_tokens`, `num_ctx` sets the
+  server's context (it restarts if a job needs more), and `think` becomes
+  `enable_thinking`. Options it can't map are logged and ignored. Prompts are
+  formatted by the GGUF's own chat template, not Ollama's renderer, so check
+  the two agree (a greedy, temperature-0 comparison) before listing a model.
+- **Memory:** only one engine holds a model at a time. Starting llama-server
+  first unloads everything Ollama has resident; an Ollama job stops
+  llama-server first; an idle llama-server stops after `idle_stop_s`. Models
+  loaded through Ollama by something other than the worker can still
+  overlap.
+- **Process:** the worker owns the server (log `llama-server.log` and a pid
+  file beside the backends file; a restarted worker stops one it left
+  behind). If the server can't start, the job runs on Ollama instead.
+- **Output:** `output.json` gains `backend` (`ollama` or `llama-server`) and,
+  when speculative decoding ran, `draft_n` / `draft_n_accepted`.
+  `load_duration_ns` is 0 on llama-server (start-up time is logged instead).
+
 ## Purging content
 
 `POST /jobs/{id}/purge` (client: `purge()`) empties a finished job's

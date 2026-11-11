@@ -40,6 +40,7 @@ from lib import (
     read_json,
     substitute_outputs,
 )
+import llama_server
 
 POLL_INTERVAL_SECONDS = 5
 PRUNE_INTERVAL_SECONDS = 3600
@@ -86,7 +87,55 @@ def output_doc(result: dict) -> dict:
         "load_duration_ns": result.get("load_duration"),
         "prompt_eval_duration_ns": result.get("prompt_eval_duration"),
         "eval_duration_ns": result.get("eval_duration"),
+        # which engine ran it, and speculative-decoding counts when it was used
+        **{k: result[k] for k in ("backend", "draft_n", "draft_n_accepted") if result.get(k) is not None},
     }
+
+
+_manager = None
+
+
+def manager():
+    """The llama-server manager, or None when no backends file configures one."""
+    global _manager
+    if _manager is None:
+        cfg = llama_server.load_config()
+        _manager = llama_server.Manager(cfg, OLLAMA_HOST) if cfg.get("models") else False
+    return _manager or None
+
+
+def run_model(job: dict, messages: list, input_doc: dict, max_runtime) -> dict:
+    """Run the chat on llama-server when the backends file lists the model
+    (default host, text only), else on Ollama. If llama-server can't start,
+    the job falls back to Ollama rather than failing."""
+    mgr = manager()
+    options = input_doc.get("sampling_options") or {}
+    think = input_doc.get("think", False)
+    if mgr and job["host"] == OLLAMA_HOST and mgr.handles(job["model"]) and llama_server.supports(messages):
+        try:
+            loaded = mgr.ensure(job["model"], options.get("num_ctx") or 0)
+            if loaded:
+                print(f"[{job['id']}] llama-server started in {loaded:.0f}s")
+        except (llama_server.BackendUnavailable, OSError, ValueError) as e:
+            print(f"[{job['id']}] llama-server unavailable ({e}); using ollama")
+            mgr.stop()
+        else:
+            body, ignored = llama_server.build_request(messages, think, options,
+                                                       mgr.model_config(job["model"]).get("defaults"))
+            if ignored:
+                print(f"[{job['id']}] options not supported by llama-server, ignored: {', '.join(ignored)}")
+            try:
+                result = llama_server.call(mgr.port, body, **({"max_runtime": max_runtime} if max_runtime else {}))
+            finally:
+                mgr.touch()
+            result["backend"] = "llama-server"
+            return result
+    if mgr:
+        mgr.stop()  # free its memory before Ollama loads a model
+    result = call_ollama(job["host"], job["model"], messages, think=think, options=options or None,
+                         **({"max_runtime": max_runtime} if max_runtime else {}))
+    result["backend"] = "ollama"
+    return result
 
 
 def recover_orphans() -> None:
@@ -216,20 +265,13 @@ def process_job(job_dir: str) -> None:
     start = time.time()
     max_runtime = effective_max_runtime(job.get("lane") or "standard", job.get("max_runtime_s"))
     try:
-        result = call_ollama(
-            job["host"],
-            job["model"],
-            messages,
-            think=input_doc.get("think", False),
-            options=input_doc.get("sampling_options"),
-            **({"max_runtime": max_runtime} if max_runtime else {}),
-        )
+        result = run_model(job, messages, input_doc, max_runtime)
     except RuntimeLimitExceeded as e:
         # not retried: another attempt would take just as long
         _fail_unrunnable(job_dir, job, f"exceeded max runtime: {e}")
         return
     except (urllib.error.URLError, TimeoutError, OSError) as e:
-        _requeue_or_fail(job_dir, job, f"ollama call failed: {e}")
+        _requeue_or_fail(job_dir, job, f"model call failed: {e}")
         return
     elapsed = time.time() - start
     print(f"[{job_id}] responded in {elapsed:.1f}s, done_reason={result.get('done_reason')}")
@@ -248,6 +290,8 @@ def process_job(job_dir: str) -> None:
 def main() -> int:
     ensure_queue_dirs()
     recover_orphans()
+    if manager() and manager().reap_stale():
+        print("stopped a llama-server left running by a previous worker")
 
     print(f"worker started, polling every {POLL_INTERVAL_SECONDS}s, host={OLLAMA_HOST}, "
           f"retention {RETENTION_DAYS} days")
@@ -263,6 +307,8 @@ def main() -> int:
                 print(f"prune failed: {e}")
         job_dir = claim_next_job()
         if job_dir is None:
+            if manager() and manager().idle_tick():
+                print("llama-server idle, stopped")
             time.sleep(POLL_INTERVAL_SECONDS)
             continue
         try:

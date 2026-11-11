@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Stand-in for llama.cpp's llama-server in tests: /health and a streamed
+/v1/chat/completions that echoes back what it was sent. Reads only --port
+and -c from its arguments; the rest are recorded for the test to inspect."""
+import json
+import os
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+args = sys.argv[1:]
+port = int(args[args.index("--port") + 1])
+record = os.environ.get("FAKE_LLAMA_RECORD")
+if record:
+    with open(record, "a") as f:
+        f.write(json.dumps(args) + "\n")
+
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        body = json.dumps({"status": "ok"}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        think = req.get("chat_template_kwargs", {}).get("enable_thinking")
+        chunks = []
+        if think:
+            chunks.append({"choices": [{"delta": {"reasoning_content": "hmm"}}]})
+        chunks.append({"choices": [{"delta": {"content": "echo:"}}]})
+        chunks.append({"choices": [{"delta": {"content": json.dumps({k: v for k, v in req.items() if k != "messages"})}}]})
+        chunks.append({"choices": [{"delta": {}, "finish_reason": "stop"}],
+                       "timings": {"prompt_n": 12, "prompt_ms": 50.0, "predicted_n": 7, "predicted_ms": 70.0,
+                                   "draft_n": 6, "draft_n_accepted": 4}})
+        for c in chunks:
+            self.wfile.write(f"data: {json.dumps(c)}\n\n".encode())
+        self.wfile.write(b"data: [DONE]\n\n")
+
+
+HTTPServer(("127.0.0.1", port), H).serve_forever()
