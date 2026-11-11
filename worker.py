@@ -185,20 +185,48 @@ def _fail_unrunnable(job_dir: str, job: dict, reason: str) -> None:
     print(f"[{job['id']}] -> failed/: {reason}")
 
 
+# Model affinity: within one lane and priority, jobs for the model that ran
+# last go first, so a mixed queue doesn't swap models on every job. Off for a
+# group once its oldest job has waited this long (0 = never group).
+AFFINITY_MAX_WAIT_S = float(os.environ.get("LLOCKET_AFFINITY_MAX_WAIT_S", "600"))
+_last_model = None   # (host, model) of the last job run
+
+
+def _age_s(job: dict, now: float) -> float:
+    try:
+        created = time.mktime(time.strptime(job.get("created_at") or "", "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
+    except (ValueError, TypeError):
+        return 0.0
+    return now - created
+
+
 def _queue_order(queued_root: str) -> list:
     """Queued job ids: standard lane before backlog, then highest priority
-    first, then FIFO by job id (ids start with their UTC timestamp). A job
-    without a lane is standard; without a priority, 0."""
-    keyed = []
+    first, then (model affinity) the last-run model's jobs first, then FIFO
+    by job id (ids start with their UTC timestamp). A job without a lane is
+    standard; without a priority, 0."""
+    now = time.time()
+    rows = []
     for job_id in os.listdir(queued_root):
         try:
             job = read_json(os.path.join(queued_root, job_id), "job.json")
             prio = int(job.get("priority") or 0)
             backlog = job.get("lane") == "backlog"
+            model = (job.get("host"), job.get("model"))
+            age = _age_s(job, now)
         except (FileNotFoundError, ValueError, TypeError):
-            prio, backlog = 0, False
-        keyed.append((backlog, -prio, job_id))
-    return [job_id for _b, _p, job_id in sorted(keyed)]
+            prio, backlog, model, age = 0, False, None, 0.0
+        rows.append((backlog, prio, model, age, job_id))
+    oldest = {}
+    for backlog, prio, _m, age, _j in rows:
+        oldest[(backlog, prio)] = max(oldest.get((backlog, prio), 0.0), age)
+    keyed = []
+    for backlog, prio, model, _age, job_id in rows:
+        grouping = _last_model is not None and AFFINITY_MAX_WAIT_S > 0 \
+            and oldest[(backlog, prio)] < AFFINITY_MAX_WAIT_S
+        other = 1 if grouping and model != _last_model else 0
+        keyed.append((backlog, -prio, other, job_id))
+    return [job_id for *_k, job_id in sorted(keyed)]
 
 
 def claim_next_job() -> str | None:
@@ -266,6 +294,8 @@ def process_job(job_dir: str) -> None:
     job_id = job["id"]
     input_doc = read_json(job_dir, "input.json")
 
+    global _last_model
+    _last_model = (job.get("host"), job.get("model"))
     print(f"[{job_id}] running ({job['model']})")
     # when the worker picked it up -- lets clients tell how long it's been running
     job["started_at"] = now_iso()

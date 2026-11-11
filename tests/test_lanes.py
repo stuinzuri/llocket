@@ -167,3 +167,43 @@ def test_list_jobs_since_skips_older_jobs_without_reading_them(q):
     assert [j["id"] for j in api.list_jobs(since="2021-01-01T00:00:00Z")] == [new]
     with pytest.raises(api.HTTPException):
         api.list_jobs(since="yesterday")
+
+
+def _model(lib, job_id, model, age_s=0):
+    d = os.path.join(lib.QUEUE_ROOT, "queued", job_id)
+    job = lib.read_json(d, "job.json")
+    import time
+    job.update(model=model, created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - age_s)))
+    lib.atomic_write_json(d, "job.json", job)
+
+
+def test_last_model_runs_first_within_a_priority(q):
+    lib, worker = q
+    for i, (m, prio) in enumerate([("a", 0), ("b", 0), ("a", 0), ("b", 0), ("b", 10)]):
+        make_job(lib, f"20260101T00000{i}Z-j{i}{m}{prio:02d}", priority=prio)
+        _model(lib, f"20260101T00000{i}Z-j{i}{m}{prio:02d}", m)
+    worker._last_model = ("h", "a")
+    # priority still wins (the b job at 10 first); within priority 0, a's jobs before b's, FIFO within each
+    assert worker._queue_order(os.path.join(lib.QUEUE_ROOT, "queued"))[0].endswith("j4b10")
+    order = [j[-5:] for j in worker._queue_order(os.path.join(lib.QUEUE_ROOT, "queued"))]
+    assert order == ["j4b10", "j0a00", "j2a00", "j1b00", "j3b00"]
+
+
+def test_affinity_yields_once_a_job_has_waited_too_long(q):
+    lib, worker = q
+    make_job(lib, "20260101T000000Z-old0b")
+    _model(lib, "20260101T000000Z-old0b", "b", age_s=worker.AFFINITY_MAX_WAIT_S + 60)
+    make_job(lib, "20260101T000001Z-new1a")
+    _model(lib, "20260101T000001Z-new1a", "a")
+    worker._last_model = ("h", "a")
+    assert [j[-5:] for j in worker._queue_order(os.path.join(lib.QUEUE_ROOT, "queued"))] == ["old0b", "new1a"]
+    worker._last_model = None            # nothing run yet: plain FIFO
+    assert [j[-5:] for j in worker._queue_order(os.path.join(lib.QUEUE_ROOT, "queued"))] == ["old0b", "new1a"]
+
+
+def test_process_job_remembers_its_model(q, monkeypatch):
+    lib, worker = q
+    make_job(lib, "20260101T000000Z-x")
+    monkeypatch.setattr(worker, "run_model", lambda *a, **k: {"message": {"content": "ok"}, "done_reason": "stop"})
+    worker.process_job(worker.claim_next_job())
+    assert worker._last_model == ("h", "m")

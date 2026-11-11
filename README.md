@@ -118,6 +118,15 @@ job always finishes first. A waiting dependent job keeps its own priority
 stream of high-priority jobs can hold back low-priority ones; keep high
 priorities for short, occasional work.
 
+**Model affinity.** Within one lane and priority, jobs for the model that
+ran last go first, so a queue mixing two models doesn't swap them on every
+job (a swap costs seconds to reload, more when it means switching engines;
+see "Levels of model management"). Grouping stops for a lane and priority
+once its oldest job has waited `LLOCKET_AFFINITY_MAX_WAIT_S` (default 600s),
+and it falls back to plain FIFO. Set it to 0 to turn affinity off. It never
+crosses priorities or lanes.
+
+
 ## Lanes
 
 Each job runs in a lane: `"standard"` (default) or `"backlog"`.
