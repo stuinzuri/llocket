@@ -84,3 +84,11 @@ def test_ollama_version_is_none_when_it_does_not_answer():
     import engines
     assert engines.ollama_version("http://127.0.0.1:1", timeout=0.5) is None
     assert engines.engine_version("ollama", "http://127.0.0.1:1") is None
+
+
+def test_get_job_shows_settings_never_messages(q):
+    api = _api(q)
+    jid = api.create_job(_req(api, think=True, sampling_options={"temperature": 0.7}))["id"]
+    job = api.get_job(jid)
+    assert job["settings"] == {"think": True, "sampling_options": {"temperature": 0.7}}
+    assert "messages" not in job and "messages" not in job["settings"]

@@ -249,7 +249,20 @@ def get_job(job_id: str):
         result["waiting_on"] = waiting_on(job)
     if state == "done":
         result["output"] = read_json(path, "output.json")
+    result["settings"] = job_settings(path)
     return result
+
+
+def job_settings(path: str) -> Optional[dict]:
+    """The request's generation settings (think, sampling_options) without
+    its messages; None when input.json is gone or unreadable."""
+    try:
+        doc = read_json(path, "input.json")
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    return {"think": doc.get("think"), "sampling_options": doc.get("sampling_options") or {}}
 
 
 @app.get("/jobs")
