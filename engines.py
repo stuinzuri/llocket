@@ -45,7 +45,8 @@ def llama_server_version(binary: str) -> Optional[str]:
         return _binary_cache[key]
     try:
         p = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=20)
-        m = re.search(r"version:\s*(\d+)", p.stdout + p.stderr)
+        out = p.stdout + p.stderr     # "version: 4321 (abc)" or "version: 0.9.0-dev (build 4321, commit abc)"
+        m = re.search(r"\(build (\d+)", out) or re.search(r"version:\s*(\d+)\s*\(", out)
         version = f"b{m.group(1)}" if m else None
     except (OSError, subprocess.SubprocessError):
         version = None

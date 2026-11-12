@@ -70,6 +70,16 @@ def test_llama_server_version_comes_from_the_binary():
     assert engines.llama_server_version("/no/such/binary") is None
 
 
+def test_llama_server_version_reads_the_newer_build_format(monkeypatch, tmp_path):
+    import subprocess
+    import engines
+    b = tmp_path / "llama-server"
+    b.write_text("")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: type("P", (), {
+        "stdout": "", "stderr": "version: 0.9.0-dev (build 12284, commit 9e9619d03)\nbuilt with a compiler\n"})())
+    assert engines.llama_server_version(str(b)) == "b12284"
+
+
 def test_ollama_version_is_none_when_it_does_not_answer():
     import engines
     assert engines.ollama_version("http://127.0.0.1:1", timeout=0.5) is None
