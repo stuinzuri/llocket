@@ -48,7 +48,8 @@ class Llocket:
         self.api = api.rstrip("/")
         self.timeout = timeout
 
-    def _request(self, method: str, path: str, body: Optional[dict] = None, params: Optional[dict] = None):
+    def _request(self, method: str, path: str, body: Optional[dict] = None, params: Optional[dict] = None,
+                 timeout: Optional[float] = None):
         url = self.api + path
         if params:
             url += "?" + urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
@@ -56,7 +57,7 @@ class Llocket:
         req = urllib.request.Request(url, data=data, method=method,
                                      headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
                 return json.loads(resp.read() or b"null")
         except urllib.error.HTTPError as e:
             raw = e.read().decode(errors="replace")
@@ -102,7 +103,13 @@ class Llocket:
             body["tags"] = list(tags)
         return self._request("POST", "/jobs", body)["id"]
 
-    def job(self, job_id: str) -> dict:
+    def job(self, job_id: str, wait: float = 0, status: Optional[str] = None) -> dict:
+        """The job's state. With wait and status (the state last seen), the
+        server holds the request up to `wait` seconds until the job leaves
+        that state (a long poll; an older server answers at once)."""
+        if wait and status:
+            return self._request("GET", f"/jobs/{job_id}", params={"wait": wait, "status": status},
+                                 timeout=self.timeout + wait)
         return self._request("GET", f"/jobs/{job_id}")
 
     def jobs(self, project: Optional[str] = None, status: Optional[str] = None,
@@ -123,13 +130,17 @@ class Llocket:
 
     def wait(self, job_id: str, poll: float = 15.0, timeout: Optional[float] = None,
              on_poll: Optional[Callable[[dict], None]] = None) -> dict:
-        """Poll until the job is done or failed; returns the final job dict.
-        Transient network/HTTP-5xx errors are reported via on_poll and retried;
-        the job keeps running server-side regardless."""
+        """Wait until the job is done or failed; returns the final job dict.
+        Long-polls: each request is held by the server up to `poll` seconds
+        and answered as soon as the job changes state, so the result is
+        picked up at once. Transient network/HTTP-5xx errors are reported via
+        on_poll and retried; the job keeps running server-side regardless."""
         start = time.monotonic()
+        last = None
         while True:
+            asked = time.monotonic()
             try:
-                job = self.job(job_id)
+                job = self.job(job_id, wait=poll, status=last) if last else self.job(job_id)
             except LlocketError as e:
                 if e.status and e.status < 500:
                     raise
@@ -140,7 +151,14 @@ class Llocket:
                 return job
             if timeout is not None and time.monotonic() - start > timeout:
                 raise LlocketError(f"timed out after {timeout}s waiting for {job_id} (still {job.get('status')})")
-            time.sleep(poll)
+            status = job.get("status")
+            held = time.monotonic() - asked
+            if status == "poll_error":
+                time.sleep(poll)
+            elif status == last and held < poll / 2:
+                time.sleep(poll - held)   # an older server answered at once: plain polling
+            if status != "poll_error":
+                last = status
 
 
 def _summary(job: dict) -> str:

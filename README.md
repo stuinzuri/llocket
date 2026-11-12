@@ -179,6 +179,17 @@ Two identical submissions in the same instant can still both be queued.
 `wait()` tolerates transient network errors; the job never depends on
 the client staying connected.
 
+## Latency
+
+- **Submit wakes the worker.** After publishing a job, the API pings the
+  worker over a local Unix datagram socket (`LLOCKET_WAKE_SOCKET`, default
+  `~/llocket/run/worker-wake.sock`; empty disables it). An idle worker
+  claims the job at once; without a ping it still polls every 5 s.
+- **Long poll.** `GET /jobs/{id}?wait=N&status=S` holds the request up to N
+  seconds (max 60) while the job is still in state S, answering as soon as
+  it moves on. `wait()` uses it, so a result is picked up the moment the
+  job finishes; against an older server it falls back to plain polling.
+
 ## Job timing
 
 The worker stamps `started_at` into `job.json` when it picks a job up, so a

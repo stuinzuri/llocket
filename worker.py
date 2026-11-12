@@ -29,6 +29,7 @@ from lib import (
     OLLAMA_HOST,
     QUEUE_ROOT,
     RETENTION_DAYS,
+    WakeListener,
     RuntimeLimitExceeded,
     atomic_write_json,
     call_ollama,
@@ -377,7 +378,8 @@ def main() -> int:
     if manager() and manager().reap_stale():
         print("stopped a llama-server left running by a previous worker")
 
-    print(f"worker started, polling every {POLL_INTERVAL_SECONDS}s, host={OLLAMA_HOST}, "
+    wake = WakeListener()
+    print(f"worker started, polling every {POLL_INTERVAL_SECONDS}s (woken at once on submit), host={OLLAMA_HOST}, "
           f"retention {RETENTION_DAYS} days")
     last_prune = 0.0
     while True:
@@ -393,7 +395,7 @@ def main() -> int:
         if job_dir is None:
             if manager() and manager().idle_tick():
                 print("llama-server idle, stopped")
-            time.sleep(POLL_INTERVAL_SECONDS)
+            wake.wait(POLL_INTERVAL_SECONDS)
             continue
         try:
             process_job(job_dir)

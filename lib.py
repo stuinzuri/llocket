@@ -22,6 +22,10 @@ import urllib.request
 # deployment, which sets neither var.
 QUEUE_ROOT = os.environ.get("LLOCKET_QUEUE_ROOT", os.path.expanduser("~/llocket/nas/queue"))
 OLLAMA_HOST = os.environ.get("LLOCKET_OLLAMA_HOST", "http://localhost:11437")
+# Local (never on the queue's network share) Unix datagram socket the worker
+# listens on: the API pings it after publishing a job so the worker claims it
+# at once instead of at its next poll. Empty disables it (poll only).
+WAKE_SOCKET = os.environ.get("LLOCKET_WAKE_SOCKET", os.path.expanduser("~/llocket/run/worker-wake.sock"))
 # Finished jobs (done/ and failed/) are transient: removed this many days
 # after their last update. 0 disables pruning.
 RETENTION_DAYS = float(os.environ.get("LLOCKET_RETENTION_DAYS", "14"))
@@ -341,3 +345,60 @@ def purge_content(job_dir: str) -> dict:
     job["content_purged_files"] = purged
     atomic_write_json(job_dir, "job.json", job)
     return job
+
+
+def wake_worker() -> bool:
+    """Tell an idle worker a job was just queued. Best-effort and safe from
+    any thread or process (each ping is one datagram); False when no worker
+    is listening, which only means the job waits for the next poll."""
+    import socket
+    if not WAKE_SOCKET:
+        return False
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
+            s.setblocking(False)
+            s.sendto(b"1", WAKE_SOCKET)
+        return True
+    except OSError:
+        return False
+
+
+class WakeListener:
+    """The worker's side of wake_worker(): wait(t) sleeps up to t seconds and
+    returns early when pinged. Falls back to a plain sleep if the socket
+    can't be bound."""
+
+    def __init__(self, path: str = None):
+        import socket
+        self.path = WAKE_SOCKET if path is None else path
+        self.sock = None
+        if not self.path:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            try:
+                os.unlink(self.path)   # left by a previous worker
+            except FileNotFoundError:
+                pass
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            sock.bind(self.path)
+            sock.setblocking(False)
+            self.sock = sock
+        except OSError as e:
+            print(f"wake socket unavailable ({e}); polling only")
+
+    def wait(self, seconds: float) -> bool:
+        """True when woken by a ping, False on timeout."""
+        if self.sock is None:
+            time.sleep(seconds)
+            return False
+        import select
+        ready, _, _ = select.select([self.sock], [], [], seconds)
+        if not ready:
+            return False
+        try:
+            while True:   # drain: several pings mean the same thing
+                self.sock.recv(16)
+        except (BlockingIOError, OSError):
+            pass
+        return True

@@ -39,7 +39,7 @@ from pydantic import BaseModel
 
 from lib import (LANES, OLLAMA_HOST, QUEUE_ROOT, STATES, atomic_write_json, dependents_pending, effective_max_runtime,
                  ensure_queue_dirs, find_identical, fingerprint, input_chars, job_fingerprint, job_state, now_iso,
-                 placeholders_in, purge_content, read_json)
+                 placeholders_in, purge_content, read_json, wake_worker)
 
 DEFAULT_MODEL = "orcarouter/Qwen3.8-27B-Uncensored:q8_0"
 
@@ -228,15 +228,31 @@ def create_job(req: JobRequest):
     queued_dir = os.path.join(QUEUE_ROOT, "queued", job_id)
     superseded = _supersede(req.project, req.dedupe_key, job_id) if req.dedupe_key else []
     os.rename(incoming_dir, queued_dir)  # atomic publish
+    wake_worker()
 
     return {"id": job_id, "status": "queued", **({"superseded": superseded} if superseded else {})}
 
 
+WAIT_MAX_S = 60
+WAIT_CHECK_S = 0.25
+
+
 @app.get("/jobs/{job_id}")
-def get_job(job_id: str):
+def get_job(job_id: str, wait: float = 0, status: Optional[str] = None):
+    """A job's state. With wait=N and status=<the state the caller last
+    saw>, holds the request up to N seconds (at most 60) and returns as
+    soon as the job leaves that state: a long poll, so a client learns a
+    job finished at once instead of at its next poll."""
     state, path = find_job_dir(job_id)
     if state is None:
         raise HTTPException(status_code=404, detail="job not found")
+    if wait > 0 and status and state == status:
+        deadline = time.monotonic() + min(float(wait), WAIT_MAX_S)
+        while state == status and time.monotonic() < deadline:
+            time.sleep(WAIT_CHECK_S)
+            state, path = find_job_dir(job_id)
+        if state is None:
+            raise HTTPException(status_code=404, detail="job not found")
 
     job = read_json(path, "job.json")
     result = dict(job)
