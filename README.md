@@ -123,9 +123,10 @@ priorities for short, occasional work.
 ran last go first, so a queue mixing two models doesn't swap them on every
 job (a swap costs seconds to reload, more when it means switching engines;
 see "Levels of model management"). Grouping stops for a lane and priority
-once its oldest job has waited `LLOCKET_AFFINITY_MAX_WAIT_S` (default 600s),
-and it falls back to plain FIFO. Set it to 0 to turn affinity off. It never
-crosses priorities or lanes.
+once its oldest job has waited `LLOCKET_AFFINITY_MAX_WAIT_S` (default 600s;
+`LLOCKET_AFFINITY_MAX_WAIT_BACKLOG_S`, default 7200s, for the backlog lane,
+whose batches wait long by design), and it falls back to plain FIFO. Set it
+to 0 to turn affinity off for that lane. It never crosses priorities or lanes.
 
 ## Lanes
 

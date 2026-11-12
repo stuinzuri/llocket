@@ -169,11 +169,13 @@ def test_list_jobs_since_skips_older_jobs_without_reading_them(q):
         api.list_jobs(since="yesterday")
 
 
-def _model(lib, job_id, model, age_s=0):
+def _model(lib, job_id, model, age_s=0, lane=None):
     d = os.path.join(lib.QUEUE_ROOT, "queued", job_id)
     job = lib.read_json(d, "job.json")
     import time
     job.update(model=model, created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - age_s)))
+    if lane:
+        job["lane"] = lane
     lib.atomic_write_json(d, "job.json", job)
 
 
@@ -198,6 +200,20 @@ def test_affinity_yields_once_a_job_has_waited_too_long(q):
     worker._last_model = ("h", "a")
     assert [j[-5:] for j in worker._queue_order(os.path.join(lib.QUEUE_ROOT, "queued"))] == ["old0b", "new1a"]
     worker._last_model = None            # nothing run yet: plain FIFO
+    assert [j[-5:] for j in worker._queue_order(os.path.join(lib.QUEUE_ROOT, "queued"))] == ["old0b", "new1a"]
+
+
+def test_backlog_keeps_grouping_longer(q):
+    lib, worker = q
+    age = worker.AFFINITY_MAX_WAIT_S + 60          # too long for standard, fine for backlog
+    assert age < worker.AFFINITY_MAX_WAIT_BACKLOG_S
+    make_job(lib, "20260101T000000Z-old0b")
+    _model(lib, "20260101T000000Z-old0b", "b", age_s=age, lane="backlog")
+    make_job(lib, "20260101T000001Z-new1a")
+    _model(lib, "20260101T000001Z-new1a", "a", lane="backlog")
+    worker._last_model = ("h", "a")
+    assert [j[-5:] for j in worker._queue_order(os.path.join(lib.QUEUE_ROOT, "queued"))] == ["new1a", "old0b"]
+    _model(lib, "20260101T000000Z-old0b", "b", age_s=worker.AFFINITY_MAX_WAIT_BACKLOG_S + 60, lane="backlog")
     assert [j[-5:] for j in worker._queue_order(os.path.join(lib.QUEUE_ROOT, "queued"))] == ["old0b", "new1a"]
 
 

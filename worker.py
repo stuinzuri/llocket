@@ -228,8 +228,10 @@ def _fail_unrunnable(job_dir: str, job: dict, reason: str) -> None:
 
 # Model affinity: within one lane and priority, jobs for the model that ran
 # last go first, so a mixed queue doesn't swap models on every job. Off for a
-# group once its oldest job has waited this long (0 = never group).
+# group once its oldest job has waited this long (0 = never group). The
+# backlog lane holds batches that wait hours by design, so it groups longer.
 AFFINITY_MAX_WAIT_S = float(os.environ.get("LLOCKET_AFFINITY_MAX_WAIT_S", "600"))
+AFFINITY_MAX_WAIT_BACKLOG_S = float(os.environ.get("LLOCKET_AFFINITY_MAX_WAIT_BACKLOG_S", "7200"))
 _last_model = None   # (host, model) of the last job run
 
 
@@ -263,8 +265,8 @@ def _queue_order(queued_root: str) -> list:
         oldest[(backlog, prio)] = max(oldest.get((backlog, prio), 0.0), age)
     keyed = []
     for backlog, prio, model, _age, job_id in rows:
-        grouping = _last_model is not None and AFFINITY_MAX_WAIT_S > 0 \
-            and oldest[(backlog, prio)] < AFFINITY_MAX_WAIT_S
+        cap = AFFINITY_MAX_WAIT_BACKLOG_S if backlog else AFFINITY_MAX_WAIT_S
+        grouping = _last_model is not None and cap > 0 and oldest[(backlog, prio)] < cap
         other = 1 if grouping and model != _last_model else 0
         keyed.append((backlog, -prio, other, job_id))
     return [job_id for *_k, job_id in sorted(keyed)]
