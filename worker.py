@@ -40,6 +40,7 @@ from lib import (
     read_json,
     substitute_outputs,
 )
+import engines
 import llama_server
 
 POLL_INTERVAL_SECONDS = 5
@@ -96,11 +97,14 @@ HOST_TAGS = _chip_tag() + [t.strip() for t in os.environ.get("LLOCKET_HOST_TAGS"
 
 
 def run_tags(job: dict, result: dict) -> list:
-    """The job's own tags, then how it ran: host tags, engine:<backend>, and
-    the backends file's tags for the model (e.g. an optimization)."""
+    """The job's own tags, then how it ran: host tags, engine:<backend>,
+    engine-version:<backend>-<version>, and the backends file's tags for the
+    model (e.g. an optimization)."""
     tags = list(job.get("tags") or []) + HOST_TAGS
     if result.get("backend"):
         tags.append(f"engine:{result['backend']}")
+    if result.get("engine_version"):
+        tags.append(f"engine-version:{result['engine_version']}")
     tags += result.get("engine_tags") or []
     return list(dict.fromkeys(tags))
 
@@ -175,6 +179,7 @@ def run_model(job: dict, messages: list, input_doc: dict, max_runtime) -> dict:
             finally:
                 mgr.touch()
             result["backend"] = "llama-server"
+            result["engine_version"] = engines.engine_version("llama-server", OLLAMA_HOST, mgr.config.get("binary"))
             result["engine_tags"] = list(mc.get("tags") or [])
             return result
     if mgr:
@@ -182,6 +187,7 @@ def run_model(job: dict, messages: list, input_doc: dict, max_runtime) -> dict:
     result = call_ollama(job["host"], job["model"], messages, think=think, options=options or None,
                          **({"max_runtime": max_runtime} if max_runtime else {}))
     result["backend"] = "ollama"
+    result["engine_version"] = engines.engine_version("ollama", job["host"])
     return result
 
 

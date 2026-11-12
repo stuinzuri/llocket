@@ -276,8 +276,14 @@ after an engine change or a hardware move.
 - **Run tags:** when a job finishes, the worker adds how it actually ran:
   `chip:<cpu>` (detected, e.g. `chip:apple-m4-pro`), any
   `LLOCKET_HOST_TAGS` (comma-separated, set on the worker), `engine:ollama`
-  or `engine:llama-server`, and the model's `tags` from the backends file
-  (e.g. an optimization such as `opt:mtp-n2`).
+  or `engine:llama-server`, the engine's version as
+  `engine-version:ollama-<version>` or `engine-version:llama-server-b<build>`
+  (so results can be split across an engine upgrade), and the model's `tags`
+  from the backends file (e.g. an optimization such as `opt:mtp-n2`).
+- `GET /engines` reports the versions the host runs:
+  `{"ollama": {"host", "version"}, "llama_server": {"binary", "version"} or null}`
+  (`engines.py`; Ollama re-checked every few minutes, a llama-server binary
+  whenever it changes).
 - `output.json` has `tags`: the job's tags followed by the run tags. Use a
   `name:value` form so tags group and filter cleanly.
 

@@ -52,3 +52,25 @@ def test_chip_tag_is_a_slug():
     import worker
     tags = worker._chip_tag()
     assert all(t.startswith("chip:") and " " not in t for t in tags)
+
+
+def test_run_tags_carry_the_engine_version(q, monkeypatch):
+    _lib, worker = q
+    monkeypatch.setattr(worker, "HOST_TAGS", [])
+    assert worker.run_tags({}, {"backend": "ollama", "engine_version": "ollama-1.2.3"}) == \
+        ["engine:ollama", "engine-version:ollama-1.2.3"]
+    assert worker.run_tags({}, {"backend": "ollama", "engine_version": None}) == ["engine:ollama"]
+
+
+def test_llama_server_version_comes_from_the_binary():
+    import engines
+    fake = os.path.join(os.path.dirname(__file__), "fake-llama-server")
+    assert engines.llama_server_version(fake) == "b4321"
+    assert engines.engine_version("llama-server", "http://127.0.0.1:1", fake) == "llama-server-b4321"
+    assert engines.llama_server_version("/no/such/binary") is None
+
+
+def test_ollama_version_is_none_when_it_does_not_answer():
+    import engines
+    assert engines.ollama_version("http://127.0.0.1:1", timeout=0.5) is None
+    assert engines.engine_version("ollama", "http://127.0.0.1:1") is None

@@ -153,6 +153,19 @@ def _supersede(project: str, dedupe_key: str, new_id: str) -> list:
     return gone
 
 
+@app.get("/engines")
+def engine_versions():
+    """The engine versions this host runs: Ollama, and llama-server when the
+    backends file names a binary."""
+    import engines
+    import llama_server
+    try:
+        binary = (llama_server.load_config() or {}).get("binary")
+    except (OSError, ValueError):
+        binary = None
+    return engines.versions(OLLAMA_HOST, binary)
+
+
 @app.post("/jobs")
 def create_job(req: JobRequest):
     if req.lane not in LANES:

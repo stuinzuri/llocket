@@ -8,6 +8,9 @@ import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 args = sys.argv[1:]
+if "--version" in args:
+    sys.stderr.write("version: 4321 (abc1234)\nbuilt with a test compiler\n")
+    sys.exit(0)
 port = int(args[args.index("--port") + 1])
 record = os.environ.get("FAKE_LLAMA_RECORD")
 if record:
