@@ -13,3 +13,10 @@ belongs in the calling project, which imports or calls llocket.
 
 If a change only makes sense in terms of one caller's needs, generalize it (a
 parameter, a hook) or keep it in that caller's repo instead.
+
+## Principles
+
+What this repo is and how it behaves is in PRINCIPLES.md; follow it, and change it
+there first when a decision changes:
+
+@PRINCIPLES.md
