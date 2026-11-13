@@ -10,9 +10,14 @@ measure speed on new hardware.
 
     python3 tools/engine_check.py --api http://host:8000 MODEL_A MODEL_B [...]
         [--long 20000] [--max-tokens 900] [--num-ctx 65536] [--project engine-check]
+        [--think both|on|off]
 
 --long pads the conversation to roughly that many prompt tokens to measure
-long-context speed (the outputs are still compared). Jobs run in the
+long-context speed (the outputs are still compared). Output text and prompt
+token counts are compared separately: llama-server counts only the prompt
+tokens it didn't have cached, so a lower count after an earlier job with the
+same prefix is expected, not a formatting difference (rerun that case alone,
+e.g. --think off, on a cold server to compare counts). Jobs run in the
 standard lane at priority 10, one attempt each. Stdlib only.
 """
 
@@ -61,12 +66,14 @@ def main() -> int:
     ap.add_argument("--max-tokens", type=int, default=900)
     ap.add_argument("--num-ctx", type=int, default=65536, help="context for every job (Ollama's default may truncate)")
     ap.add_argument("--project", default="engine-check")
+    ap.add_argument("--think", choices=("both", "on", "off"), default="both", help="which thinking modes to run")
     a = ap.parse_args()
 
     opts = {"temperature": 0, "seed": 1, "num_predict": a.max_tokens, "num_ctx": a.num_ctx}
     msgs = messages(a.long)
+    modes = {"both": (True, False), "on": (True,), "off": (False,)}[a.think]
     jobs = {}
-    for think in (True, False):
+    for think in modes:
         for model in a.models:
             jobs[(think, model)] = call(a.api, "POST", "/jobs", {
                 "project": a.project, "purpose": "engine check", "model": model, "messages": msgs,
@@ -81,7 +88,7 @@ def main() -> int:
                 if j["status"] in ("done", "failed", "cancelled"):
                     done[key] = j
     ok = True
-    for think in (True, False):
+    for think in modes:
         print(f"\nthinking {'on' if think else 'off'}")
         ref = None
         for model in a.models:
@@ -95,12 +102,15 @@ def main() -> int:
             acc = (f", drafts accepted {o['draft_n_accepted']}/{o['draft_n']}"
                    f" ({o['draft_n_accepted'] / o['draft_n']:.0%})" if o.get("draft_n") else "")
             text = (o.get("thinking") or "") + "\x00" + (o.get("content") or "")
-            same = "" if ref is None else (" | SAME output as first" if text == ref[1] and o["prompt_eval_count"] == ref[0]
-                                            else " | DIFFERENT from first")
+            same = ""
             if ref is None:
                 ref = (o["prompt_eval_count"], text)
-            elif "DIFFERENT" in same:
-                ok = False
+            else:
+                same = " | SAME output as first" if text == ref[1] else " | DIFFERENT output from first"
+                if o["prompt_eval_count"] != ref[0]:
+                    same += f" (prompt tokens {o['prompt_eval_count']} vs {ref[0]}: fewer can mean a cached prefix)"
+                if text != ref[1]:
+                    ok = False
             print(f"  {model} [{o.get('backend', '?')}]: prompt {o['prompt_eval_count']}, output {o['eval_count']},"
                   f" {tps:.2f} tok/s{acc}{same}")
     return 0 if ok else 1
